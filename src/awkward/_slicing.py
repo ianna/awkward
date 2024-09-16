@@ -21,7 +21,19 @@ np = NumpyMetadata.instance()
 
 SliceItem: TypeAlias = "int | slice | str | None | Ellipsis | ArrayLike | Content"
 
+import functools
 
+def trace_function_calls(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        print(f"_slicing.py: Calling function: {func.__name__}")
+        result = func(*args, **kwargs)
+        print(f"_slicing.py: Function {func.__name__} returned {result}")
+        return result
+    return wrapper
+
+
+@trace_function_calls
 def normalize_slice(slice_: slice, *, nplike: NumpyLike) -> slice:
     """
     Args:
@@ -59,6 +71,7 @@ NO_HEAD = _NoHead()
 S = TypeVar("S", bound=Sequence)
 
 
+@trace_function_calls
 def head_tail(sequence: S[T]) -> tuple[T | type(NO_HEAD), S[T]]:
     if len(sequence) == 0:
         return NO_HEAD, ()
@@ -66,6 +79,7 @@ def head_tail(sequence: S[T]) -> tuple[T | type(NO_HEAD), S[T]]:
         return sequence[0], sequence[1:]
 
 
+@trace_function_calls
 def prepare_advanced_indexing(items, backend: Backend):
     """Broadcast index objects to satisfy NumPy indexing rules
 
@@ -177,7 +191,7 @@ def prepare_advanced_indexing(items, backend: Backend):
             )
     return tuple(prepared)
 
-
+@trace_function_calls
 def normalize_integer_like(x) -> int | ArrayLike:
     if is_array_like(x):
         if np.issubdtype(x.dtype, np.integer) and x.ndim == 0:
@@ -187,7 +201,7 @@ def normalize_integer_like(x) -> int | ArrayLike:
     else:
         return int(x)
 
-
+@trace_function_calls
 def normalise_item(item, backend: Backend) -> SliceItem:
     """
     Args:
@@ -300,12 +314,12 @@ def normalise_item(item, backend: Backend) -> SliceItem:
             + repr(item).replace("\n", "\n    ")
         )
 
-
+@trace_function_calls
 def normalise_items(where: Sequence, backend: Backend) -> list:
     # First prepare items for broadcasting into like-types
     return [normalise_item(x, backend=backend) for x in where]
 
-
+@trace_function_calls
 def _normalise_item_RegularArray_to_ListOffsetArray64(item: Content) -> Content:
     if isinstance(item, ak.contents.RegularArray):
         next = item.to_ListOffsetArray64()
@@ -321,7 +335,7 @@ def _normalise_item_RegularArray_to_ListOffsetArray64(item: Content) -> Content:
     else:
         raise AssertionError(type(item))
 
-
+@trace_function_calls
 def _normalise_item_nested(item: Content) -> Content:
     if isinstance(item, ak.contents.EmptyArray):
         # policy: unknown -> int
@@ -460,7 +474,7 @@ def _normalise_item_nested(item: Content) -> Content:
             + repr(item).replace("\n", "\n    ")
         )
 
-
+@trace_function_calls
 def _normalise_item_bool_to_int(item: Content, backend: Backend) -> Content:
     """
     Args:
@@ -650,7 +664,7 @@ def _normalise_item_bool_to_int(item: Content, backend: Backend) -> Content:
     else:
         raise AssertionError(type(item))
 
-
+@trace_function_calls
 def getitem_next_array_wrap(
     outcontent: Content, shape: tuple[int], outer_length: int = 0
 ) -> Content:

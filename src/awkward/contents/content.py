@@ -72,7 +72,16 @@ ActionType: TypeAlias = """Callable[
 JSONValueType: TypeAlias = """
 float | int | str | list[JSONValueType] | dict[str, JSONValueType]
 """
+import functools
 
+def trace_function_calls(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        print(f"content.py: Calling function: {func.__name__}")
+        result = func(*args, **kwargs)
+        print(f"content.py: Function {func.__name__} returned {result}")
+        return result
+    return wrapper
 
 class ImplementsApplyAction(Protocol):
     def __call__(
@@ -298,6 +307,7 @@ class Content(Meta):
         for i in range(len(self)):
             yield self._getitem_at(i)
 
+    @trace_function_calls
     def _getitem_next_field(
         self,
         head: SliceItem | tuple,
@@ -307,6 +317,7 @@ class Content(Meta):
         nexthead, nexttail = ak._slicing.head_tail(tail)
         return self._getitem_field(head)._getitem_next(nexthead, nexttail, advanced)
 
+    @trace_function_calls
     def _getitem_next_fields(
         self, head: SliceItem, tail: tuple[SliceItem, ...], advanced: Index | None
     ) -> Content:
@@ -321,6 +332,8 @@ class Content(Meta):
             nexthead, nexttail, advanced
         )
 
+
+    @trace_function_calls
     def _getitem_next_newaxis(
         self, tail: tuple[SliceItem, ...], advanced: Index | None
     ) -> RegularArray:
@@ -329,6 +342,7 @@ class Content(Meta):
             self._getitem_next(nexthead, nexttail, advanced), 1, 0, parameters=None
         )
 
+    @trace_function_calls
     def _getitem_next_ellipsis(
         self, tail: tuple[SliceItem, ...], advanced: Index | None
     ) -> Content:
@@ -353,6 +367,7 @@ class Content(Meta):
         else:
             return self._getitem_next(slice(None), (Ellipsis, *tail), advanced)
 
+    @trace_function_calls
     def _getitem_next_regular_missing(
         self,
         head: IndexedOptionArray,
@@ -395,6 +410,7 @@ class Content(Meta):
             out, indexlength, 1, parameters=self._parameters
         )
 
+    @trace_function_calls
     def _getitem_next_missing_jagged(
         self, head: Content, tail, advanced: Index | None, that: Content
     ) -> RegularArray:
@@ -447,6 +463,7 @@ class Content(Meta):
             out, index.length, 1, parameters=self._parameters
         )
 
+    @trace_function_calls
     def _getitem_next_missing(
         self,
         head: IndexedOptionArray,
@@ -508,9 +525,11 @@ class Content(Meta):
                 f"FIXME: unhandled case of SliceMissing with {nextcontent}"
             )
 
+    @trace_function_calls
     def __getitem__(self, where):
         return self._getitem(where)
 
+    @trace_function_calls
     def _getitem(self, where):
         if is_integer_like(where):
             return self._getitem_at(ak._slicing.normalize_integer_like(where))
@@ -693,25 +712,31 @@ class Content(Meta):
                 + repr(where).replace("\n", "\n    ")
             )
 
+    @trace_function_calls
     def _is_getitem_at_placeholder(self) -> bool:
         raise NotImplementedError
 
+    @trace_function_calls
     def _getitem_at(self, where: IndexType):
         raise NotImplementedError
 
+    @trace_function_calls
     def _getitem_range(self, start: IndexType, stop: IndexType) -> Content:
         raise NotImplementedError
 
+    @trace_function_calls
     def _getitem_field(
         self, where: str | SupportsIndex, only_fields: tuple[str, ...] = ()
     ) -> Content:
         raise NotImplementedError
 
+    @trace_function_calls
     def _getitem_fields(
         self, where: list[str], only_fields: tuple[str, ...] = ()
     ) -> Content:
         raise NotImplementedError
 
+    @trace_function_calls
     def _getitem_next(
         self,
         head: SliceItem | tuple,
@@ -720,6 +745,7 @@ class Content(Meta):
     ) -> Content:
         raise NotImplementedError
 
+    @trace_function_calls
     def _getitem_next_jagged(
         self,
         slicestarts: Index,
@@ -729,9 +755,11 @@ class Content(Meta):
     ) -> Content:
         raise NotImplementedError
 
+    @trace_function_calls
     def _carry(self, carry: Index, allow_lazy: bool) -> Content:
         raise NotImplementedError
 
+    @trace_function_calls
     def _local_index_axis0(self) -> NumpyArray:
         localindex = Index64.empty(self.length, self._backend.index_nplike)
         self._backend.maybe_kernel_error(
@@ -744,6 +772,7 @@ class Content(Meta):
             localindex.data, parameters=None, backend=self._backend
         )
 
+    @trace_function_calls
     def _mergeable_next(self, other: Content, mergebool: bool) -> bool:
         raise NotImplementedError
 

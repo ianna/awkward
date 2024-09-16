@@ -49,6 +49,16 @@ if TYPE_CHECKING:
 np = NumpyMetadata.instance()
 numpy = Numpy.instance()
 
+import functools
+
+def trace_function_calls(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        print(f"listoffsetarray.py: Calling function: {func.__name__}")
+        result = func(*args, **kwargs)
+        print(f"listoffsetArray.py: Function {func.__name__} returned {result}")
+        return result
+    return wrapper
 
 @final
 class ListOffsetArray(ListOffsetMeta[Content], Content):
@@ -298,12 +308,15 @@ class ListOffsetArray(ListOffsetMeta[Content], Content):
             content, size, length, parameters=self._parameters
         )
 
+    @trace_function_calls
     def _getitem_nothing(self):
         return self._content._getitem_range(0, 0)
 
+    @trace_function_calls
     def _is_getitem_at_placeholder(self) -> bool:
         return isinstance(self._offsets, PlaceholderArray)
 
+    @trace_function_calls
     def _getitem_at(self, where: IndexType):
         # Wrap `where` by length
         if not is_unknown_scalar(where) and where < 0:
@@ -319,6 +332,7 @@ class ListOffsetArray(ListOffsetMeta[Content], Content):
         start, stop = self._offsets[where], self._offsets[where + 1]
         return self._content._getitem_range(start, stop)
 
+    @trace_function_calls
     def _getitem_range(self, start: IndexType, stop: IndexType) -> Content:
         if not self._backend.nplike.known_data:
             self._touch_shape(recursive=False)
@@ -332,6 +346,7 @@ class ListOffsetArray(ListOffsetMeta[Content], Content):
             )
         return ListOffsetArray(offsets, self._content, parameters=self._parameters)
 
+    @trace_function_calls
     def _getitem_field(
         self, where: str | SupportsIndex, only_fields: tuple[str, ...] = ()
     ) -> Content:
@@ -341,6 +356,7 @@ class ListOffsetArray(ListOffsetMeta[Content], Content):
             parameters=None,
         )
 
+    @trace_function_calls
     def _getitem_fields(
         self, where: list[str | SupportsIndex], only_fields: tuple[str, ...] = ()
     ) -> Content:
@@ -350,6 +366,7 @@ class ListOffsetArray(ListOffsetMeta[Content], Content):
             parameters=None,
         )
 
+    @trace_function_calls
     def _carry(self, carry: Index, allow_lazy: bool) -> Content:
         assert isinstance(carry, ak.index.Index)
 
@@ -363,6 +380,7 @@ class ListOffsetArray(ListOffsetMeta[Content], Content):
             nextstarts, nextstops, self._content, parameters=self._parameters
         )
 
+    @trace_function_calls
     def _compact_offsets64(self, start_at_zero: bool) -> Index64:
         if not start_at_zero or (
             self._backend.index_nplike.known_data and self._offsets[0] == 0
@@ -374,6 +392,7 @@ class ListOffsetArray(ListOffsetMeta[Content], Content):
                 nplike=self._backend.index_nplike,
             )
 
+    @trace_function_calls
     def _broadcast_tooffsets64(self, offsets: Index) -> ListOffsetArray:
         self._touch_data(recursive=False)
         offsets._touch_data()
@@ -415,6 +434,7 @@ class ListOffsetArray(ListOffsetMeta[Content], Content):
             offsets, next_content[: offsets[-1]], parameters=self._parameters
         )
 
+    @trace_function_calls
     def _getitem_next_jagged(
         self, slicestarts: Index, slicestops: Index, slicecontent: Content, tail
     ) -> Content:
@@ -423,6 +443,7 @@ class ListOffsetArray(ListOffsetMeta[Content], Content):
         )
         return out._getitem_next_jagged(slicestarts, slicestops, slicecontent, tail)
 
+    @trace_function_calls
     def _getitem_next(
         self,
         head: SliceItem | tuple,
@@ -700,6 +721,7 @@ class ListOffsetArray(ListOffsetMeta[Content], Content):
         else:
             raise AssertionError(repr(head))
 
+    @trace_function_calls
     def _offsets_and_flattened(self, axis: int, depth: int) -> tuple[Index, Content]:
         posaxis = maybe_posaxis(self, axis, depth)
         if posaxis is not None and posaxis + 1 == depth:
@@ -776,6 +798,7 @@ class ListOffsetArray(ListOffsetMeta[Content], Content):
                     ListOffsetArray(tooffsets, flattened, parameters=self._parameters),
                 )
 
+    @trace_function_calls
     def _mergeable_next(self, other: Content, mergebool: bool) -> bool:
         # Is the other content is an identity, or a union?
         if other.is_identity_like or other.is_union:

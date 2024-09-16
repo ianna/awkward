@@ -56,6 +56,16 @@ if TYPE_CHECKING:
 np = NumpyMetadata.instance()
 numpy = Numpy.instance()
 
+import functools
+
+def trace_function_calls(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        print(f"numpyarray.py: Calling function: {func.__name__}")
+        result = func(*args, **kwargs)
+        print(f"numpyarray.py: Function {func.__name__} returned {result}")
+        return result
+    return wrapper
 
 @final
 class NumpyArray(NumpyMeta, Content):
@@ -299,6 +309,7 @@ class NumpyArray(NumpyMeta, Content):
     def __iter__(self):
         return iter(self._data)
 
+    @trace_function_calls
     def _getitem_nothing(self):
         tmp = self._data[0:0]
         return NumpyArray(
@@ -307,9 +318,11 @@ class NumpyArray(NumpyMeta, Content):
             backend=self._backend,
         )
 
+    @trace_function_calls
     def _is_getitem_at_placeholder(self) -> bool:
         return isinstance(self._data, PlaceholderArray)
 
+    @trace_function_calls
     def _getitem_at(self, where: IndexType):
         if not self._backend.nplike.known_data and len(self._data.shape) == 1:
             self._touch_data(recursive=False)
@@ -325,6 +338,7 @@ class NumpyArray(NumpyMeta, Content):
         else:
             return out
 
+    @trace_function_calls
     def _getitem_range(self, start: IndexType, stop: IndexType) -> Content:
         try:
             out = self._data[start:stop]
@@ -333,11 +347,13 @@ class NumpyArray(NumpyMeta, Content):
 
         return NumpyArray(out, parameters=self._parameters, backend=self._backend)
 
+    @trace_function_calls
     def _getitem_field(
         self, where: str | SupportsIndex, only_fields: tuple[str, ...] = ()
     ) -> Content:
         raise ak._errors.index_error(self, where, "not an array of records")
 
+    @trace_function_calls
     def _getitem_fields(
         self, where: list[str | SupportsIndex], only_fields: tuple[str, ...] = ()
     ) -> Content:
@@ -345,6 +361,7 @@ class NumpyArray(NumpyMeta, Content):
             return self._getitem_range(0, 0)
         raise ak._errors.index_error(self, where, "not an array of records")
 
+    @trace_function_calls
     def _carry(self, carry: Index, allow_lazy: bool) -> Content:
         assert isinstance(carry, ak.index.Index)
         try:
@@ -353,6 +370,7 @@ class NumpyArray(NumpyMeta, Content):
             raise ak._errors.index_error(self, carry.data, str(err)) from err
         return NumpyArray(nextdata, parameters=self._parameters, backend=self._backend)
 
+    @trace_function_calls
     def _getitem_next_jagged(
         self, slicestarts: Index, slicestops: Index, slicecontent: Content, tail
     ) -> Content:
@@ -370,6 +388,7 @@ class NumpyArray(NumpyMeta, Content):
                 slicestarts, slicestops, slicecontent, tail
             )
 
+    @trace_function_calls
     def _getitem_next(
         self,
         head: SliceItem | tuple,
@@ -440,6 +459,7 @@ class NumpyArray(NumpyMeta, Content):
         else:
             raise AssertionError(repr(head))
 
+    @trace_function_calls
     def _offsets_and_flattened(self, axis: int, depth: int) -> tuple[Index, Content]:
         posaxis = maybe_posaxis(self, axis, depth)
         if posaxis is not None and posaxis + 1 == depth:
@@ -451,6 +471,7 @@ class NumpyArray(NumpyMeta, Content):
         else:
             raise AxisError(f"axis={axis} exceeds the depth of this array ({depth})")
 
+    @trace_function_calls
     def _mergeable_next(self, other: Content, mergebool: bool) -> bool:
         # Is the other content is an identity, or a union?
         if other.is_identity_like or other.is_union:
