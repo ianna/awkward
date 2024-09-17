@@ -466,17 +466,20 @@ def cleanup_cuda():
 #         [{"x": [11], "y": [[None]]}],
 #     ]
 
+arrg_cpu = ak.Array([[1, 2, 3], [0], [4, 5]])
+arrg_gpu = ak.Array([[1, 2, 3], [0], [4, 5]], backend="cuda")
+
 def test_simple_slice_cpu():
-    arrg = ak.Array([[1, 2, 3], [0], [4, 5]])
-    out = arrg[:, 0]
+    print("slice on CPU")
+    out = arrg_cpu[:, 0]
     expected = [1, 0, 4]
     result = out.tolist()
     cp.testing.assert_array_list_equal(result, expected, err_msg=f"Slice of [[1, 2, 3], [0], [4, 5]] should be {expected}, but got {result}")
 
 
 def test_simple_slice_gpu():
-    arrg = ak.Array([[1, 2, 3], [0], [4, 5]], backend="cuda")
-    out = arrg[:, 0]
+    print("slice on GPU")
+    out = arrg_gpu[:, 0]
     expected = [1, 0, 4]
     result = out.tolist()
     cp.testing.assert_array_list_equal(result, expected, err_msg=f"Slice of [[1, 2, 3], [0], [4, 5]] should be {expected}, but got {result}")

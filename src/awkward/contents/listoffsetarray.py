@@ -318,6 +318,7 @@ class ListOffsetArray(ListOffsetMeta[Content], Content):
 
     @trace_function_calls
     def _getitem_at(self, where: IndexType):
+        print("    listoffsetarray::_getitem_at", self, self.backend, where)
         # Wrap `where` by length
         if not is_unknown_scalar(where) and where < 0:
             length_index = self._backend.index_nplike.shape_item_as_index(self.length)
@@ -330,6 +331,8 @@ class ListOffsetArray(ListOffsetMeta[Content], Content):
         ):
             raise ak._errors.index_error(self, where)
         start, stop = self._offsets[where], self._offsets[where + 1]
+        print("    listoffsetarray::_getitem_at start stop", start, stop)
+
         return self._content._getitem_range(start, stop)
 
     @trace_function_calls

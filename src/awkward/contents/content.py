@@ -527,44 +527,57 @@ class Content(Meta):
 
     @trace_function_calls
     def __getitem__(self, where):
+        print("   content::__getitem__ of ", self, self.backend)
         return self._getitem(where)
 
     @trace_function_calls
     def _getitem(self, where):
         if is_integer_like(where):
+            print("    in content::_getitem: is integer like!", where)
             return self._getitem_at(ak._slicing.normalize_integer_like(where))
 
         elif isinstance(where, slice) and where.step is None:
+            print("    content::slice with step???")
             # Ensure that start, stop are non-negative!
             start, stop, _, _ = self._backend.index_nplike.derive_slice_for_length(
                 normalize_slice(where, nplike=self._backend.index_nplike), self.length
             )
+            print("    >>>start, stop", start, stop)
             return self._getitem_range(start, stop)
 
         elif isinstance(where, slice):
+            print("    content::slice???")
             return self._getitem((where,))
 
         elif isinstance(where, str):
+            print("    content::str")
             return self._getitem_field(where)
 
         elif where is np.newaxis:
+            print("    content::axis")
             return self._getitem((where,))
 
         elif where is Ellipsis:
+            print("    content::Ellipsis")
             return self._getitem((where,))
 
         elif isinstance(where, tuple):
+            print("    content::tuple", where)
             if len(where) == 0:
+                print("    len 0")
                 return self
 
             # Backend may change if index contains typetracers
             backend = backend_of(self, *where, coerce_to_common=True)
             this = self.to_backend(backend)
+            print("    this", this)
 
             # Normalise valid indices onto well-defined basis
             items = ak._slicing.normalise_items(where, backend)
+            print("    items", items)
             # Prepare items for advanced indexing (e.g. via broadcasting)
             nextwhere = ak._slicing.prepare_advanced_indexing(items, backend)
+            print("    nextwhere", nextwhere)
 
             next = ak.contents.RegularArray(
                 this,
@@ -572,8 +585,11 @@ class Content(Meta):
                 1,
                 parameters=None,
             )
+            print("    next", next)
+
 
             out = next._getitem_next(nextwhere[0], nextwhere[1:], None)
+            print("    content::tuple out", out)
 
             if out.length is not unknown_length and out.length == 0:
                 return out._getitem_nothing()
@@ -581,6 +597,7 @@ class Content(Meta):
                 return out._getitem_at(0)
 
         elif isinstance(where, ak.highlevel.Array):
+            print("    content::Array")
             return self._getitem(where.layout)
 
         # Convert between nplikes of different backends
@@ -588,10 +605,12 @@ class Content(Meta):
             isinstance(where, ak.contents.Content)
             and where.backend is not self._backend
         ):
+            print("    content::backends")
             backend = backend_of(self, where, coerce_to_common=True)
             return self.to_backend(backend)._getitem(where.to_backend(backend))
 
         elif isinstance(where, ak.contents.NumpyArray):
+            print("    content::NumpyArray")
             data_as_index = to_nplike(
                 where.data,
                 self._backend.index_nplike,

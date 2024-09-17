@@ -214,9 +214,11 @@ def normalise_item(item, backend: Backend) -> SliceItem:
     """
     # Basic indices
     if is_integer_like(item):
+        print("    normalize_item::integer_like", item)
         return normalize_integer_like(item)
 
     elif isinstance(item, slice):
+        print("    normalize_item::slice", item)
         return normalize_slice(item, nplike=backend.index_nplike)
 
     elif isinstance(item, str):
@@ -317,6 +319,8 @@ def normalise_item(item, backend: Backend) -> SliceItem:
 @trace_function_calls
 def normalise_items(where: Sequence, backend: Backend) -> list:
     # First prepare items for broadcasting into like-types
+    for x in where:
+        print("    normalise_items", x, where)
     return [normalise_item(x, backend=backend) for x in where]
 
 @trace_function_calls

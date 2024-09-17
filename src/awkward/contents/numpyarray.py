@@ -324,6 +324,7 @@ class NumpyArray(NumpyMeta, Content):
 
     @trace_function_calls
     def _getitem_at(self, where: IndexType):
+        print("    numpyarray::_getitem_at", self, where)
         if not self._backend.nplike.known_data and len(self._data.shape) == 1:
             self._touch_data(recursive=False)
             return TypeTracerArray._new(self._data.dtype, shape=())
@@ -332,14 +333,16 @@ class NumpyArray(NumpyMeta, Content):
             out = self._data[where]
         except IndexError as err:
             raise ak._errors.index_error(self, where, str(err)) from err
-
+        print("   >>> out", out)
         if hasattr(out, "shape") and len(out.shape) != 0:
+            print("   >>> out has shape!", out)
             return NumpyArray(out, parameters=None, backend=self._backend)
         else:
             return out
 
     @trace_function_calls
     def _getitem_range(self, start: IndexType, stop: IndexType) -> Content:
+        print("    numpyarray::_getitem_range start stop", start, stop)
         try:
             out = self._data[start:stop]
         except IndexError as err:
