@@ -72,7 +72,16 @@ ActionType: TypeAlias = """Callable[
 JSONValueType: TypeAlias = """
 float | int | str | list[JSONValueType] | dict[str, JSONValueType]
 """
+import functools
 
+def trace_function_calls(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        print(f"content.py: Calling function: {func.__name__}")
+        result = func(*args, **kwargs)
+        print(f"content.py: Function {func.__name__} returned {result}")
+        return result
+    return wrapper
 
 class ImplementsApplyAction(Protocol):
     def __call__(
@@ -298,6 +307,7 @@ class Content(Meta):
         for i in range(len(self)):
             yield self._getitem_at(i)
 
+    @trace_function_calls
     def _getitem_next_field(
         self,
         head: SliceItem | tuple,
@@ -307,6 +317,7 @@ class Content(Meta):
         nexthead, nexttail = ak._slicing.head_tail(tail)
         return self._getitem_field(head)._getitem_next(nexthead, nexttail, advanced)
 
+    @trace_function_calls
     def _getitem_next_fields(
         self, head: SliceItem, tail: tuple[SliceItem, ...], advanced: Index | None
     ) -> Content:
@@ -321,6 +332,8 @@ class Content(Meta):
             nexthead, nexttail, advanced
         )
 
+
+    @trace_function_calls
     def _getitem_next_newaxis(
         self, tail: tuple[SliceItem, ...], advanced: Index | None
     ) -> RegularArray:
@@ -329,6 +342,7 @@ class Content(Meta):
             self._getitem_next(nexthead, nexttail, advanced), 1, 0, parameters=None
         )
 
+    @trace_function_calls
     def _getitem_next_ellipsis(
         self, tail: tuple[SliceItem, ...], advanced: Index | None
     ) -> Content:
@@ -353,6 +367,7 @@ class Content(Meta):
         else:
             return self._getitem_next(slice(None), (Ellipsis, *tail), advanced)
 
+    @trace_function_calls
     def _getitem_next_regular_missing(
         self,
         head: IndexedOptionArray,
@@ -395,6 +410,7 @@ class Content(Meta):
             out, indexlength, 1, parameters=self._parameters
         )
 
+    @trace_function_calls
     def _getitem_next_missing_jagged(
         self, head: Content, tail, advanced: Index | None, that: Content
     ) -> RegularArray:
@@ -447,6 +463,7 @@ class Content(Meta):
             out, index.length, 1, parameters=self._parameters
         )
 
+    @trace_function_calls
     def _getitem_next_missing(
         self,
         head: IndexedOptionArray,
@@ -508,44 +525,59 @@ class Content(Meta):
                 f"FIXME: unhandled case of SliceMissing with {nextcontent}"
             )
 
+    @trace_function_calls
     def __getitem__(self, where):
+        print("   content::__getitem__ of ", self, self.backend)
         return self._getitem(where)
 
+    @trace_function_calls
     def _getitem(self, where):
         if is_integer_like(where):
+            print("    in content::_getitem: is integer like!", where)
             return self._getitem_at(ak._slicing.normalize_integer_like(where))
 
         elif isinstance(where, slice) and where.step is None:
+            print("    content::slice with step???")
             # Ensure that start, stop are non-negative!
             start, stop, _, _ = self._backend.index_nplike.derive_slice_for_length(
                 normalize_slice(where, nplike=self._backend.index_nplike), self.length
             )
+            print("    >>>start, stop", start, stop)
             return self._getitem_range(start, stop)
 
         elif isinstance(where, slice):
+            print("    content::slice???")
             return self._getitem((where,))
 
         elif isinstance(where, str):
+            print("    content::str")
             return self._getitem_field(where)
 
         elif where is np.newaxis:
+            print("    content::axis")
             return self._getitem((where,))
 
         elif where is Ellipsis:
+            print("    content::Ellipsis")
             return self._getitem((where,))
 
         elif isinstance(where, tuple):
+            print("    content::tuple", where)
             if len(where) == 0:
+                print("    len 0")
                 return self
 
             # Backend may change if index contains typetracers
             backend = backend_of(self, *where, coerce_to_common=True)
             this = self.to_backend(backend)
+            print("    this", this)
 
             # Normalise valid indices onto well-defined basis
             items = ak._slicing.normalise_items(where, backend)
+            print("    items", items)
             # Prepare items for advanced indexing (e.g. via broadcasting)
             nextwhere = ak._slicing.prepare_advanced_indexing(items, backend)
+            print("    nextwhere", nextwhere)
 
             next = ak.contents.RegularArray(
                 this,
@@ -553,8 +585,11 @@ class Content(Meta):
                 1,
                 parameters=None,
             )
+            print("    next", next)
+
 
             out = next._getitem_next(nextwhere[0], nextwhere[1:], None)
+            print("    content::tuple out", out)
 
             if out.length is not unknown_length and out.length == 0:
                 return out._getitem_nothing()
@@ -562,6 +597,7 @@ class Content(Meta):
                 return out._getitem_at(0)
 
         elif isinstance(where, ak.highlevel.Array):
+            print("    content::Array")
             return self._getitem(where.layout)
 
         # Convert between nplikes of different backends
@@ -569,10 +605,12 @@ class Content(Meta):
             isinstance(where, ak.contents.Content)
             and where.backend is not self._backend
         ):
+            print("    content::backends")
             backend = backend_of(self, where, coerce_to_common=True)
             return self.to_backend(backend)._getitem(where.to_backend(backend))
 
         elif isinstance(where, ak.contents.NumpyArray):
+            print("    content::NumpyArray")
             data_as_index = to_nplike(
                 where.data,
                 self._backend.index_nplike,
@@ -693,25 +731,31 @@ class Content(Meta):
                 + repr(where).replace("\n", "\n    ")
             )
 
+    @trace_function_calls
     def _is_getitem_at_placeholder(self) -> bool:
         raise NotImplementedError
 
+    @trace_function_calls
     def _getitem_at(self, where: IndexType):
         raise NotImplementedError
 
+    @trace_function_calls
     def _getitem_range(self, start: IndexType, stop: IndexType) -> Content:
         raise NotImplementedError
 
+    @trace_function_calls
     def _getitem_field(
         self, where: str | SupportsIndex, only_fields: tuple[str, ...] = ()
     ) -> Content:
         raise NotImplementedError
 
+    @trace_function_calls
     def _getitem_fields(
         self, where: list[str], only_fields: tuple[str, ...] = ()
     ) -> Content:
         raise NotImplementedError
 
+    @trace_function_calls
     def _getitem_next(
         self,
         head: SliceItem | tuple,
@@ -720,6 +764,7 @@ class Content(Meta):
     ) -> Content:
         raise NotImplementedError
 
+    @trace_function_calls
     def _getitem_next_jagged(
         self,
         slicestarts: Index,
@@ -729,9 +774,11 @@ class Content(Meta):
     ) -> Content:
         raise NotImplementedError
 
+    @trace_function_calls
     def _carry(self, carry: Index, allow_lazy: bool) -> Content:
         raise NotImplementedError
 
+    @trace_function_calls
     def _local_index_axis0(self) -> NumpyArray:
         localindex = Index64.empty(self.length, self._backend.index_nplike)
         self._backend.maybe_kernel_error(
@@ -744,6 +791,7 @@ class Content(Meta):
             localindex.data, parameters=None, backend=self._backend
         )
 
+    @trace_function_calls
     def _mergeable_next(self, other: Content, mergebool: bool) -> bool:
         raise NotImplementedError
 

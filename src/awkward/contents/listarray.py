@@ -47,6 +47,16 @@ if TYPE_CHECKING:
 
 np = NumpyMetadata.instance()
 
+import functools
+
+def trace_function_calls(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        print(f"listarray.py: Calling function: {func.__name__}")
+        result = func(*args, **kwargs)
+        print(f"listarray.py: Function {func.__name__} returned {result}")
+        return result
+    return wrapper
 
 @final
 class ListArray(ListMeta[Content], Content):
@@ -298,14 +308,17 @@ class ListArray(ListMeta[Content], Content):
         offsets = self._compact_offsets64(True)
         return self._broadcast_tooffsets64(offsets).to_RegularArray()
 
+    @trace_function_calls
     def _getitem_nothing(self):
         return self._content._getitem_range(0, 0)
 
+    @trace_function_calls
     def _is_getitem_at_placeholder(self) -> bool:
         return isinstance(self._starts, PlaceholderArray) or isinstance(
             self._stops, PlaceholderArray
         )
 
+    @trace_function_calls
     def _getitem_at(self, where: IndexType):
         if not self._backend.nplike.known_data:
             self._touch_data(recursive=False)
@@ -318,6 +331,7 @@ class ListArray(ListMeta[Content], Content):
         start, stop = self._starts[where], self._stops[where]
         return self._content._getitem_range(start, stop)
 
+    @trace_function_calls
     def _getitem_range(self, start: IndexType, stop: IndexType) -> Content:
         if not self._backend.nplike.known_data:
             self._touch_shape(recursive=False)
@@ -330,6 +344,7 @@ class ListArray(ListMeta[Content], Content):
             parameters=self._parameters,
         )
 
+    @trace_function_calls
     def _getitem_field(
         self, where: str | SupportsIndex, only_fields: tuple[str, ...] = ()
     ) -> Content:
@@ -340,6 +355,7 @@ class ListArray(ListMeta[Content], Content):
             parameters=None,
         )
 
+    @trace_function_calls
     def _getitem_fields(
         self, where: list[str | SupportsIndex], only_fields: tuple[str, ...] = ()
     ) -> Content:
@@ -350,6 +366,7 @@ class ListArray(ListMeta[Content], Content):
             parameters=None,
         )
 
+    @trace_function_calls
     def _carry(self, carry: Index, allow_lazy: bool) -> Content:
         assert isinstance(carry, ak.index.Index)
 
@@ -363,6 +380,7 @@ class ListArray(ListMeta[Content], Content):
             nextstarts, nextstops, self._content, parameters=self._parameters
         )
 
+    @trace_function_calls
     def _compact_offsets64(self, start_at_zero):
         starts_len = self._starts.length
         out = ak.index.Index64.empty(
@@ -389,6 +407,7 @@ class ListArray(ListMeta[Content], Content):
         )
         return out
 
+    @trace_function_calls
     def _broadcast_tooffsets64(self, offsets: Index) -> ListOffsetArray:
         self._touch_data(recursive=False)
         offsets._touch_data()
@@ -443,6 +462,7 @@ class ListArray(ListMeta[Content], Content):
 
         return ListOffsetArray(offsets, nextcontent, parameters=self._parameters)
 
+    @trace_function_calls
     def _getitem_next_jagged(
         self, slicestarts: Index, slicestops: Index, slicecontent: Content, tail
     ) -> Content:
@@ -698,6 +718,7 @@ class ListArray(ListMeta[Content], Content):
                 f"expected Index/IndexedOptionArray/ListOffsetArray in ListArray._getitem_next_jagged, got {type(slicecontent).__name__}"
             )
 
+    @trace_function_calls
     def _getitem_next(
         self,
         head: SliceItem | tuple,
@@ -1058,9 +1079,11 @@ class ListArray(ListMeta[Content], Content):
         else:
             raise AssertionError(repr(head))
 
+    @trace_function_calls
     def _offsets_and_flattened(self, axis: int, depth: int) -> tuple[Index, Content]:
         return self.to_ListOffsetArray64(True)._offsets_and_flattened(axis, depth)
 
+    @trace_function_calls
     def _mergeable_next(self, other: Content, mergebool: bool) -> bool:
         # Is the other content is an identity, or a union?
         if other.is_identity_like or other.is_union:
