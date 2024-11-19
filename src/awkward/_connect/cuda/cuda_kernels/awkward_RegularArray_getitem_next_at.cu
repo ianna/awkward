@@ -27,6 +27,7 @@ awkward_RegularArray_getitem_next_at(
     if (regular_at < 0) {
       regular_at += size;
     }
+
     if (!(0 <= regular_at && regular_at < size)) {
       RAISE_ERROR(REGULARARRAY_GETITEM_NEXT_AT_ERRORS::IND_OUT_OF_RANGE)
     }

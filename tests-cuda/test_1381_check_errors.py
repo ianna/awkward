@@ -22,25 +22,25 @@ def test():
 
     array_cuda = ak.to_backend(array, "cuda")
     with cp.cuda.Stream() as stream:
-        print(array_cuda[10,])
-        print(array_cuda[11,])
-        print(array_cuda[12,])
+        array_cuda[10,]
+        array_cuda[11,]
+        array_cuda[12,]
 
-    #with pytest.raises(ValueError) as err:
-    awkward._connect.cuda.synchronize_cuda(stream)
+    with pytest.raises(ValueError) as err:
+        awkward._connect.cuda.synchronize_cuda(stream)
 
-    # assert isinstance(err.value, ValueError)
+    assert isinstance(err.value, ValueError)
 
-    # message = "".join(traceback.format_exception(err.type, err.value, err.tb))
-    # assert (
-    #     "ValueError: index out of range in compiled CUDA code "
-    #     "(awkward_RegularArray_getitem_next_at)\n"
-    #     "\n"
-    #     "This error occurred while attempting to slice\n"
-    #     "\n"
-    #     "    <Array [1, 2, 3, 4, 5] type='5 * int64'>\n"
-    #     "\n"
-    #     "with\n"
-    #     "\n"
-    #     "    (10)\n"
-    # ) in message
+    message = "".join(traceback.format_exception(err.type, err.value, err.tb))
+    assert (
+        "ValueError: index out of range in compiled CUDA code "
+        "(awkward_RegularArray_getitem_next_at)\n"
+        "\n"
+        "This error occurred while attempting to slice\n"
+        "\n"
+        "    <Array [1, 2, 3, 4, 5] type='5 * int64'>\n"
+        "\n"
+        "with\n"
+        "\n"
+        "    (10)\n"
+    ) in message
