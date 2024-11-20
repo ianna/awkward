@@ -15,10 +15,6 @@
 //     block_results = cupy.full(grid_size, identity, dtype=toptr.dtype)
 //     block_parents = cupy.full(grid_size, -1, dtype=parents.dtype)
 // 
-//     # Temporary array for intermediate results
-//     temp = cupy.full(lenparents, identity, dtype=toptr.dtype)
-// 
-//     print("temp (initial):", temp)
 //     print("parents:", parents)
 // 
 //     # Launch the first kernel
@@ -29,7 +25,7 @@
 //         parents.dtype
 //     ]))((grid_size,), block, (
 //         toptr, fromptr, parents, lenparents, outlength, 
-//         toptr.dtype.type(identity), temp, invocation_index, err_code))
+//         toptr.dtype.type(identity), invocation_index, err_code))
 // 
 //     # Launch the second kernel (with shared memory usage)
 //     shared_mem_size = block[0] * (toptr.itemsize + parents.itemsize)  # Shared memory size
@@ -40,14 +36,13 @@
 //         parents.dtype
 //     ]))((grid_size,), block, (
 //         toptr, fromptr, parents, lenparents, outlength, 
-//         toptr.dtype.type(identity), temp, block_results, block_parents, 
+//         toptr.dtype.type(identity), block_results, block_parents, 
 //         invocation_index, err_code), shared_mem=shared_mem_size)
 // 
 //     # Debugging: Print intermediate results
 //     print("block_results:", block_results)
 //     print("block_parents:", block_parents)
 //     print("toptr (after kernel b):", toptr)
-//     print("temp:", temp)
 //     print("grid_size:", grid_size)
 // 
 //     # Launch the third kernel (global reduction across blocks)
@@ -73,7 +68,6 @@ awkward_reduce_max_a(
     int64_t lenparents,
     int64_t outlength,
     T identity,
-    T* temp,
     uint64_t invocation_index,
     uint64_t* err_code) {
   if (err_code[0] == NO_ERROR) {
@@ -94,7 +88,6 @@ awkward_reduce_max_b(
     int64_t lenparents,
     int64_t outlength,
     T identity,
-    T* temp,
     T* block_results,
     U* block_parents,
     uint64_t invocation_index,
