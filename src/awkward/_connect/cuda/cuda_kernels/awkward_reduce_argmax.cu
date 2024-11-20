@@ -14,7 +14,7 @@
 //     block_parents = cupy.full(grid_size, -1, dtype=parents.dtype)
 // 
 //     print("parents:", parents)
-//     identity = -1
+//     identity = -9223372036854775806
 //     # Launch the first kernel
 //     cuda_kernel_templates.get_function(fetch_specialization([
 //         "awkward_reduce_argmax_a",

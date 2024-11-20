@@ -121,6 +121,7 @@ cuda_kernels_impl = [
     "awkward_UnionArray_simplify_one",
     "awkward_RecordArray_reduce_nonlocal_outoffsets_64",
     "awkward_reduce_argmax",
+    "awkward_reduce_argmin",
     "awkward_reduce_count_64",
     "awkward_reduce_max",
     "awkward_reduce_max_complex",
