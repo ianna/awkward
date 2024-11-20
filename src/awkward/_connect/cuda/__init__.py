@@ -57,13 +57,13 @@ def fetch_specialization(keys):
             specialized_name = specialized_name + dtype_string.split("'")[1] + "_t, "
         else:
             specialized_name = specialized_name + dtype_to_ctype[key] + ", "
-
+    
     if dtype_to_ctype.get(keys[-1]) is None:
         dtype_string = repr(keys[-1])
         specialized_name = specialized_name + dtype_string.split("'")[1] + "_t>"
     else:
         specialized_name = specialized_name + dtype_to_ctype[keys[-1]] + ">"
-
+    
     return specialized_name
 
 

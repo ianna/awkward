@@ -505,9 +505,20 @@ int16_t atomicMax(uint16_t* address, uint16_t val)
 __forceinline__ __device__
 int64_t atomicMax(int64_t* address, int64_t val)
 {
-    using T = long long int;
-    return awkward::detail::typesAtomicOperation64
-        (address, val, [](T* a, T v){return atomicMax(a, v);});
+    unsigned long long int* address_as_ull =
+        (unsigned long long int*)address;
+    unsigned long long int old = *address_as_ull, assumed;
+
+    do {
+        assumed = old;
+        old = atomicCAS(address_as_ull, assumed,
+                        max(val, (int64_t)assumed));
+    } while (assumed != old);
+
+    return (int64_t)old;
+    //     using T = long long int;
+    // return awkward::detail::typesAtomicOperation64
+    //     (address, val, [](T* a, T v){return atomicMax(a, v);});
 }
 
 /**
