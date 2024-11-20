@@ -23,7 +23,7 @@
 //         parents.dtype
 //     ]))((grid_size,), block, (
 //         toptr, fromptr, parents, lenparents, outlength, 
-//         toptr.dtype.type(identity), invocation_index, err_code))
+//         invocation_index, err_code))
 // 
 //     # Launch the second kernel (with shared memory usage)
 //     shared_mem_size = block[0] * (toptr.itemsize + parents.itemsize)  # Shared memory size
@@ -57,7 +57,6 @@ awkward_reduce_argmax_a(
     const U* parents,
     int64_t lenparents,
     int64_t outlength,
-    T identity,
     uint64_t invocation_index,
     uint64_t* err_code) {
   if (err_code[0] == NO_ERROR) {
@@ -67,7 +66,7 @@ awkward_reduce_argmax_a(
     int64_t thread_id = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (thread_id < outlength) {
-      toptr[thread_id] = identity;
+      toptr[thread_id] = -1; // Initialize indices to -1 (invalid index)
     }
   }
 }
@@ -91,7 +90,7 @@ awkward_reduce_argmax_b(
     
     extern __shared__ char shared_memory[];
     T* shared_temp = reinterpret_cast<T*>(shared_memory);
-    U* shared_indices = reinterpret_cast<U*>(shared_memory + blockDim.x * sizeof(T));
+    T* shared_indices = reinterpret_cast<T*>(shared_memory + blockDim.x * sizeof(T));
 
     int64_t thread_id = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -112,34 +111,34 @@ awkward_reduce_argmax_b(
     }
     __syncthreads();
 
-    // Perform block-level reduction within the same parent group
+     // Perform block-level reduction
     for (int stride = 1; stride < blockDim.x; stride *= 2) {
-      if (threadIdx.x >= stride && 
-          thread_id - stride >= 0 && 
-          parents[thread_id] == parents[thread_id - stride]) {
-        T other_max = shared_temp[threadIdx.x - stride];
-        U other_index = shared_indices[threadIdx.x - stride];
-        if (shared_temp[threadIdx.x] < other_max) {
-          shared_temp[threadIdx.x] = other_max;
-          shared_indices[threadIdx.x] = other_index;
+        if (threadIdx.x >= stride && thread_id - stride >= 0 &&
+            parents[thread_id] == parents[thread_id - stride]) {
+            // Compare max values and update
+            if (shared_temp[threadIdx.x] < shared_temp[threadIdx.x - stride]) {
+                shared_temp[threadIdx.x] = shared_temp[threadIdx.x - stride];
+                shared_indices[threadIdx.x] = shared_indices[threadIdx.x - stride];
+            }
         }
-      }
-      __syncthreads();
+        __syncthreads();
     }
 
     // Store the results of the block reduction
-    if (threadIdx.x == blockDim.x - 1 || thread_id == lenparents - 1 || 
+    if (threadIdx.x == blockDim.x - 1 || 
+        thread_id == lenparents - 1 || 
         parents[thread_id] != parents[thread_id + 1]) {
-      int64_t parent = parents[thread_id];
-      atomicMax(&toptr[parent], shared_temp[threadIdx.x]);
+        
+        int64_t parent = parents[thread_id];
+        atomicMax(&toptr[parent], shared_indices[threadIdx.x]);
 
-      // Only the last thread updates block results and parents
-      if (threadIdx.x == blockDim.x - 1 || 
-          thread_id == lenparents - 1 || 
-          parents[thread_id] != parents[thread_id + 1]) {
-        block_results[blockIdx.x] = shared_temp[threadIdx.x];
-        block_parents[blockIdx.x] = shared_indices[threadIdx.x];  // Store the index of the max within the parent group
-      }
+        // Only the last thread updates block results and parents
+        if (threadIdx.x == blockDim.x - 1 || 
+            thread_id == lenparents - 1 || 
+            parents[thread_id] != parents[thread_id + 1]) {
+            block_results[blockIdx.x] = shared_temp[threadIdx.x];
+            block_parents[blockIdx.x] = parent;  // Ensure block_parents is updated
+        }
     }
   }
 }
