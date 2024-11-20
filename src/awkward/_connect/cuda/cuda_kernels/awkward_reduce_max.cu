@@ -4,12 +4,10 @@
 // def f(grid, block, args):
 //     (toptr, fromptr, parents, lenparents, outlength, identity, invocation_index, err_code) = args
 // 
-//     # Ensure block size is valid
-//     if block[0] <= 0:
-//         raise ValueError("Block size must be greater than 0")
-// 
-//     # Compute grid size
-//     grid_size = math.ceil(lenparents / block[0]) 
+//     if block[0] > 0:
+//         grid_size = math.floor((lenparents + block[0] - 1) / block[0])
+//     else:
+//         grid_size = 1
 // 
 //     # Temporary arrays for block-level results
 //     block_results = cupy.full(grid_size, identity, dtype=toptr.dtype)
@@ -63,6 +61,9 @@ awkward_reduce_max_a(
     uint64_t invocation_index,
     uint64_t* err_code) {
   if (err_code[0] == NO_ERROR) {
+    // Early exit if there are no parents to process
+    if (lenparents == 0) return;
+
     int64_t thread_id = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (thread_id < outlength) {
@@ -85,6 +86,9 @@ awkward_reduce_max_b(
     uint64_t invocation_index,
     uint64_t* err_code) {
   if (err_code[0] == NO_ERROR) {
+    // Early exit if there are no parents to process
+    if (lenparents == 0) return;
+    
     extern __shared__ char shared_memory[];
     T* shared_temp = reinterpret_cast<T*>(shared_memory);
 

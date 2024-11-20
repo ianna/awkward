@@ -424,9 +424,7 @@ int64_t atomicMin(int64_t* address, int64_t val)
 __forceinline__ __device__
 uint64_t atomicMin(uint64_t* address, uint64_t val)
 {
-    using T = unsigned long long int;
-    return awkward::detail::typesAtomicOperationU64
-        (address, val, [](T* a, T v){return atomicMin(a, v);});
+    return awkward::genericAtomicOperation(address, val, awkward::DeviceMin{});
 }
 
 /**
@@ -513,9 +511,7 @@ int64_t atomicMax(int64_t* address, int64_t val)
 __forceinline__ __device__
 uint64_t atomicMax(uint64_t* address, uint64_t val)
 {
-    using T = unsigned long long int;
-    return awkward::detail::typesAtomicOperationU64
-        (address, val, [](T* a, T v){return atomicMax(a, v);});
+    return awkward::genericAtomicOperation(address, val, awkward::DeviceMax{});
 }
 
 /**
