@@ -103,12 +103,13 @@ namespace awkward {
 
 namespace detail {
 
-template <typename T_output, typename T_input>
-__forceinline__  __device__
-T_output type_reinterpret(T_input value)
-{
-    return *( reinterpret_cast<T_output*>(&value) );
-}
+    template <typename T_output, typename T_input>
+    __forceinline__  __device__
+    T_output type_reinterpret(T_input value)
+    {
+        return *( reinterpret_cast<T_output*>(&value) );
+    }
+    
     // the implementation of `genericAtomicOperation`
     template <typename T, typename Op, size_t n>
     struct genericAtomicOperationImpl;
@@ -414,9 +415,7 @@ uint16_t atomicMin(uint16_t* address, uint16_t val)
 __forceinline__ __device__
 int64_t atomicMin(int64_t* address, int64_t val)
 {
-    using T = long long int;
-    return awkward::detail::typesAtomicOperation64
-        (address, val, [](T* a, T v){return atomicMin(a, v);});
+    return awkward::genericAtomicOperation(address, val, awkward::DeviceMin{});
 }
 
 /**
@@ -505,20 +504,7 @@ int16_t atomicMax(uint16_t* address, uint16_t val)
 __forceinline__ __device__
 int64_t atomicMax(int64_t* address, int64_t val)
 {
-    unsigned long long int* address_as_ull =
-        (unsigned long long int*)address;
-    unsigned long long int old = *address_as_ull, assumed;
-
-    do {
-        assumed = old;
-        old = atomicCAS(address_as_ull, assumed,
-                        max(val, (int64_t)assumed));
-    } while (assumed != old);
-
-    return (int64_t)old;
-    //     using T = long long int;
-    // return awkward::detail::typesAtomicOperation64
-    //     (address, val, [](T* a, T v){return atomicMax(a, v);});
+    return awkward::genericAtomicOperation(address, val, awkward::DeviceMax{});
 }
 
 /**

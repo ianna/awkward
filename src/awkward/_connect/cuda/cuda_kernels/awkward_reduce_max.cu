@@ -45,18 +45,10 @@
 //     print("toptr (after kernel b):", toptr)
 //     print("grid_size:", grid_size)
 // 
-//     # Launch the third kernel (global reduction across blocks)
-//     cuda_kernel_templates.get_function(fetch_specialization([
-//         "awkward_reduce_max_c",
-//         cupy.dtype(toptr.dtype).type,
-//         cupy.dtype(fromptr.dtype).type,
-//         parents.dtype
-//     ]))((1,), (grid_size,), (toptr, block_results, block_parents, grid_size, invocation_index, err_code))
 // 
 // # Mark the kernels in the output dictionary
 // out["awkward_reduce_max_a", {dtype_specializations}] = None
 // out["awkward_reduce_max_b", {dtype_specializations}] = None
-// out["awkward_reduce_max_c", {dtype_specializations}] = None
 // END PYTHON
 
 template <typename T, typename C, typename U>
@@ -133,29 +125,6 @@ awkward_reduce_max_b(
           parents[thread_id] != parents[thread_id + 1]) {
         block_results[blockIdx.x] = shared_temp[threadIdx.x];
         block_parents[blockIdx.x] = parent; // Ensure block_parents is updated
-      }
-    }
-  }
-}
-
-template <typename T, typename C, typename U>
-__global__ void
-awkward_reduce_max_c(
-    T* toptr,
-    const T* block_results,
-    const U* block_parents,
-    int64_t num_blocks,
-    uint64_t invocation_index,
-    uint64_t* err_code) {
-  if (err_code[0] == NO_ERROR) {
-    int64_t thread_id = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (thread_id < num_blocks) {
-      U parent = block_parents[thread_id];
-      T value = block_results[thread_id];
-
-      if (parent != -1) {
-        atomicMax(&toptr[parent], value);
       }
     }
   }
