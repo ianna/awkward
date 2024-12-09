@@ -5,13 +5,9 @@
 //     (toptr, fromptr, parents, lenparents, outlength, invocation_index, err_code) = args
 // 
 //     if block[0] > 0:
-//         grid_size = math.floor((lenparents + block[0] - 1) / block[0])
+//         grid_size = math.ceil(lenparents / block[0])
 //     else:
 //         grid_size = 1
-// 
-//     # Temporary arrays for block-level results
-//     block_results = cupy.full(grid_size, -1, dtype=toptr.dtype)
-//     block_parents = cupy.full(grid_size, -1, dtype=parents.dtype)
 // 
 //     print("parents:", parents)
 //     identity = 9223372036854775806
@@ -26,7 +22,7 @@
 //         invocation_index, err_code))
 // 
 //     # Launch the second kernel (with shared memory usage)
-//     shared_mem_size = block[0] * (toptr.itemsize + parents.itemsize)  # Shared memory size
+//     shared_mem_size = 2 * block[0] * toptr.itemsize
 //     cuda_kernel_templates.get_function(fetch_specialization([
 //         "awkward_reduce_argmin_b",
 //         cupy.dtype(toptr.dtype).type,
@@ -34,12 +30,10 @@
 //         parents.dtype
 //     ]))((grid_size,), block, (
 //         toptr, fromptr, parents, lenparents, outlength, 
-//         toptr.dtype.type(identity), block_results, block_parents, 
+//         toptr.dtype.type(identity), 
 //         invocation_index, err_code), shared_mem=shared_mem_size)
 // 
 //     # Debugging: Print intermediate results
-//     print("block_results:", block_results)
-//     print("block_parents:", block_parents)
 //     print("toptr (after kernel b):", toptr)
 //     print("grid_size:", grid_size)
 // 
@@ -80,8 +74,6 @@ awkward_reduce_argmin_b(
     int64_t lenparents,
     int64_t outlength,
     T identity,
-    T* block_results,
-    U* block_parents,
     uint64_t invocation_index,
     uint64_t* err_code) {
   if (err_code[0] == NO_ERROR) {
@@ -94,46 +86,67 @@ awkward_reduce_argmin_b(
 
     int64_t thread_id = blockIdx.x * blockDim.x + threadIdx.x;
 
+    // Initialize shared memory
     if (thread_id < lenparents) {
-      shared_temp[threadIdx.x] = fromptr[thread_id]; // Track the parent of the current element
-      shared_indices[threadIdx.x] = thread_id; // Track the index of the min value
+      shared_temp[threadIdx.x] = fromptr[thread_id];
+      shared_indices[threadIdx.x] = thread_id;
     } else {
       shared_temp[threadIdx.x] = identity;
-      shared_indices[threadIdx.x] = -1;  // Invalid index when out of bounds
+      shared_indices[threadIdx.x] = -1;  // Invalid index
     }
     __syncthreads();
 
     // Perform block-level reduction
     for (int stride = 1; stride < blockDim.x; stride *= 2) {
-        if (threadIdx.x >= stride && thread_id - stride >= 0 &&
-            parents[thread_id] == parents[thread_id - stride]) {
-            // Compare min values and update
-            if (shared_temp[threadIdx.x] > shared_temp[threadIdx.x - stride]) {
-                shared_temp[threadIdx.x] = shared_temp[threadIdx.x - stride];
-                shared_indices[threadIdx.x] = shared_indices[threadIdx.x - stride];
-            }
+      int neighbor_idx = threadIdx.x - stride;
+      if (neighbor_idx >= 0 && thread_id >= stride &&
+          parents[thread_id] == parents[thread_id - stride]) {
+        if (shared_temp[threadIdx.x] > shared_temp[neighbor_idx]) {
+          shared_temp[threadIdx.x] = shared_temp[neighbor_idx];
+          shared_indices[threadIdx.x] = shared_indices[neighbor_idx];
         }
-        __syncthreads();
+      }
+      __syncthreads();
     }
 
-    // After the reduction, store the block results and parents
+    // Store block-level results
     if (threadIdx.x == blockDim.x - 1 || 
         thread_id == lenparents - 1 || 
-        parents[thread_id] != parents[thread_id + 1]) {
-        
-        int64_t parent = parents[thread_id];
-        
-        // Update the toptr with the smallest index within the parent group
-        // Using atomicMin ensures that the smallest index is chosen
-        atomicMin(&toptr[parent], shared_indices[threadIdx.x]);
+        (thread_id + 1 < lenparents && parents[thread_id] != parents[thread_id + 1])) {
+      int64_t parent = parents[thread_id];
 
-        // Only the last thread updates block results and parents
-        if (threadIdx.x == blockDim.x - 1 || 
-            thread_id == lenparents - 1 || 
-            parents[thread_id] != parents[thread_id + 1]) {
-            block_results[blockIdx.x] = shared_temp[threadIdx.x];
-            block_parents[blockIdx.x] = parent;  // Ensure block_parents is updated
+      // Validate parent index before updating `toptr`
+      if (parent >= 0 && parent < outlength) {
+        int current_index = shared_indices[threadIdx.x];
+        C current_value = fromptr[current_index];
+
+        // Use atomicCAS to compare values and update `toptr` conditionally
+        bool updated = false;
+        while (!updated) {
+          int existing_index = toptr[parent];
+          if (existing_index == -1) {
+            // If `toptr[parent]` is uninitialized, assign the current index
+            if (atomicCAS(&toptr[parent], -1, current_index) == -1) {
+              updated = true;  // Successfully assigned
+            }
+          } else {
+            // Compare the current value with the existing value
+            C existing_value = fromptr[existing_index];
+            if (current_value < existing_value) {
+              // Attempt to replace the index with the current one
+              if (atomicCAS(&toptr[parent], existing_index, current_index) == existing_index) {
+                updated = true;  // Successfully replaced
+              }
+            } else {
+              // No update needed
+              updated = true;
+            }
+          }
         }
+      } else {
+        // Debugging: Print invalid parent indices
+        printf("Invalid parent index: %lld (thread_id: %lld)\n", parent, thread_id);
+      }
     }
   }
 }

@@ -5,7 +5,7 @@
 //     (toptr, fromptr, parents, lenparents, outlength, invocation_index, err_code) = args
 // 
 //     if block[0] > 0:
-//         grid_size = math.floor((lenparents + block[0] - 1) / block[0])
+//         grid_size = math.ceil(lenparents / block[0])
 //     else:
 //         grid_size = 1
 // 
