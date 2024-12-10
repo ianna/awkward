@@ -10,7 +10,7 @@
 //         grid_size = 1
 // 
 //     print("parents:", parents)
-//     identity = 9223372036854775806
+// 
 //     # Launch the first kernel
 //     cuda_kernel_templates.get_function(fetch_specialization([
 //         "awkward_reduce_argmin_a",
@@ -30,7 +30,6 @@
 //         parents.dtype
 //     ]))((grid_size,), block, (
 //         toptr, fromptr, parents, lenparents, outlength, 
-//         toptr.dtype.type(identity), 
 //         invocation_index, err_code), shared_mem=shared_mem_size)
 // 
 //     # Debugging: Print intermediate results
@@ -73,27 +72,23 @@ awkward_reduce_argmin_b(
     const U* parents,
     int64_t lenparents,
     int64_t outlength,
-    T identity,
     uint64_t invocation_index,
     uint64_t* err_code) {
   if (err_code[0] == NO_ERROR) {
     // Early exit if there are no parents to process
     if (lenparents == 0) return;
 
+    int64_t thread_id = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // Early exit if there are no parents to process
+    if (thread_id >= lenparents) return;
+
     extern __shared__ char shared_memory[];
     T* shared_temp = reinterpret_cast<T*>(shared_memory);
     T* shared_indices = reinterpret_cast<T*>(shared_memory + blockDim.x * sizeof(T));
 
-    int64_t thread_id = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // Initialize shared memory
-    if (thread_id < lenparents) {
-      shared_temp[threadIdx.x] = fromptr[thread_id];
-      shared_indices[threadIdx.x] = thread_id;
-    } else {
-      shared_temp[threadIdx.x] = identity;
-      shared_indices[threadIdx.x] = -1;  // Invalid index
-    }
+    shared_temp[threadIdx.x] = fromptr[thread_id];
+    shared_indices[threadIdx.x] = thread_id;
     __syncthreads();
 
     // Perform block-level reduction

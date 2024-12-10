@@ -14,7 +14,8 @@
 //     block_parents = cupy.full(grid_size, -1, dtype=parents.dtype)
 // 
 //     print("parents:", parents)
-//     identity = -9223372036854775806
+//     identity = get_identity(toptr.dtype, "max")
+// 
 //     # Launch the first kernel
 //     cuda_kernel_templates.get_function(fetch_specialization([
 //         "awkward_reduce_argmax_a",
@@ -26,7 +27,7 @@
 //         invocation_index, err_code))
 // 
 //     # Launch the second kernel (with shared memory usage)
-//     shared_mem_size = block[0] * (toptr.itemsize + parents.itemsize)  # Shared memory size
+//     shared_mem_size = 2 * block[0] * toptr.itemsize
 //     cuda_kernel_templates.get_function(fetch_specialization([
 //         "awkward_reduce_argmax_b",
 //         cupy.dtype(toptr.dtype).type,
@@ -34,7 +35,7 @@
 //         parents.dtype
 //     ]))((grid_size,), block, (
 //         toptr, fromptr, parents, lenparents, outlength, 
-//         toptr.dtype.type(identity), block_results, block_parents, 
+//         identity, block_results, block_parents, 
 //         invocation_index, err_code), shared_mem=shared_mem_size)
 // 
 //     # Debugging: Print intermediate results

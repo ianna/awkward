@@ -55,6 +55,32 @@ typedef unsigned long long uintmax_t;
 //       return supported_types[str(dtype)]
 //   else:
 //       raise ValueError("Unsupported dtype.", dtype)
+// 
+// 
+// def get_identity(dtype, operation):
+//     """
+//     Returns the identity value for a given operation and data type.
+// 
+//     Parameters:
+//     - dtype: CuPy data type (e.g., cupy.float32, cupy.int64)
+//     - operation: The reduction operation ('min', 'max', 'sum', 'product')
+// 
+//     Returns:
+//     - The identity value for the operation as a CuPy scalar.
+//     """
+//     if operation == "min":
+//         return cupy.array(cupy.iinfo(dtype).max if cupy.issubdtype(dtype, cupy.integer)
+//                         else cupy.finfo(dtype).max, dtype=dtype)
+//     elif operation == "max":
+//         return cupy.array(cupy.iinfo(dtype).min if cupy.issubdtype(dtype, cupy.integer)
+//                         else cupy.finfo(dtype).min, dtype=dtype)
+//     elif operation == "sum":
+//         return cupy.array(0, dtype=dtype)
+//     elif operation == "product":
+//         return cupy.array(1, dtype=dtype)
+//     else:
+//         raise ValueError(f"Unsupported operation: {operation}")
+// 
 // END PYTHON
 
 
