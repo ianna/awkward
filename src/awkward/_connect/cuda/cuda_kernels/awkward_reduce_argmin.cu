@@ -9,8 +9,6 @@
 //     else:
 //         grid_size = 1
 // 
-//     print("parents:", parents)
-// 
 //     # Launch the first kernel
 //     cuda_kernel_templates.get_function(fetch_specialization([
 //         "awkward_reduce_argmin_a",
@@ -31,10 +29,6 @@
 //     ]))((grid_size,), block, (
 //         toptr, fromptr, parents, lenparents, outlength, 
 //         invocation_index, err_code), shared_mem=shared_mem_size)
-// 
-//     # Debugging: Print intermediate results
-//     print("toptr (after kernel b):", toptr)
-//     print("grid_size:", grid_size)
 // 
 // 
 // # Mark the kernels in the output dictionary

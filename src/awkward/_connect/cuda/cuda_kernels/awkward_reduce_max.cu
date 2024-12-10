@@ -13,8 +13,6 @@
 //     block_results = cupy.full(grid_size, identity, dtype=toptr.dtype)
 //     block_parents = cupy.full(grid_size, -1, dtype=parents.dtype)
 // 
-//     print("parents:", parents)
-// 
 //     # Launch the first kernel
 //     cuda_kernel_templates.get_function(fetch_specialization([
 //         "awkward_reduce_max_a",
@@ -36,13 +34,6 @@
 //         toptr, fromptr, parents, lenparents, outlength, 
 //         toptr.dtype.type(identity), block_results, block_parents, 
 //         invocation_index, err_code), shared_mem=shared_mem_size)
-// 
-//     # Debugging: Print intermediate results
-//     print("block_results:", block_results)
-//     print("block_parents:", block_parents)
-//     print("toptr (after kernel b):", toptr)
-//     print("grid_size:", grid_size)
-// 
 // 
 // # Mark the kernels in the output dictionary
 // out["awkward_reduce_max_a", {dtype_specializations}] = None

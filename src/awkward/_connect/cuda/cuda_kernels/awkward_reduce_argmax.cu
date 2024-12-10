@@ -9,11 +9,6 @@
 //     else:
 //         grid_size = 1
 // 
-//     # Temporary arrays for block-level results
-//     block_results = cupy.full(grid_size, -1, dtype=toptr.dtype)
-//     block_parents = cupy.full(grid_size, -1, dtype=parents.dtype)
-// 
-//     print("parents:", parents)
 //     identity = get_identity(toptr.dtype, "max")
 // 
 //     # Launch the first kernel
@@ -35,15 +30,7 @@
 //         parents.dtype
 //     ]))((grid_size,), block, (
 //         toptr, fromptr, parents, lenparents, outlength, 
-//         identity, block_results, block_parents, 
 //         invocation_index, err_code), shared_mem=shared_mem_size)
-// 
-//     # Debugging: Print intermediate results
-//     print("block_results:", block_results)
-//     print("block_parents:", block_parents)
-//     print("toptr (after kernel b):", toptr)
-//     print("grid_size:", grid_size)
-// 
 // 
 // # Mark the kernels in the output dictionary
 // out["awkward_reduce_argmax_a", {dtype_specializations}] = None
@@ -80,66 +67,77 @@ awkward_reduce_argmax_b(
     const U* parents,
     int64_t lenparents,
     int64_t outlength,
-    T identity,
-    T* block_results,
-    U* block_parents,
     uint64_t invocation_index,
     uint64_t* err_code) {
   if (err_code[0] == NO_ERROR) {
     // Early exit if there are no parents to process
     if (lenparents == 0) return;
-    
+
+    int64_t thread_id = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // Early exit if thread is out of bounds
+    if (thread_id >= lenparents) return;
+
     extern __shared__ char shared_memory[];
     T* shared_temp = reinterpret_cast<T*>(shared_memory);
     T* shared_indices = reinterpret_cast<T*>(shared_memory + blockDim.x * sizeof(T));
 
-    int64_t thread_id = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // Initialize local variables
-    T local_max = identity;
-    U local_index = -1;
-    U local_parent = -1;
-
-    if (thread_id < lenparents) {
-      local_max = fromptr[thread_id];
-      local_index = thread_id;  // Track the index of the max value
-      local_parent = parents[thread_id];  // Track the parent of the current element
-      shared_temp[threadIdx.x] = local_max;
-      shared_indices[threadIdx.x] = local_index;
-    } else {
-      shared_temp[threadIdx.x] = identity;
-      shared_indices[threadIdx.x] = -1;  // Invalid index when out of bounds
-    }
+    // Initialize shared memory with the current value and index
+    shared_temp[threadIdx.x] = fromptr[thread_id];
+    shared_indices[threadIdx.x] = thread_id;
     __syncthreads();
 
-     // Perform block-level reduction
+    // Perform block-level reduction for argmax
     for (int stride = 1; stride < blockDim.x; stride *= 2) {
-        if (threadIdx.x >= stride && thread_id - stride >= 0 &&
-            parents[thread_id] == parents[thread_id - stride]) {
-            // Compare max values and update
-            if (shared_temp[threadIdx.x] < shared_temp[threadIdx.x - stride]) {
-                shared_temp[threadIdx.x] = shared_temp[threadIdx.x - stride];
-                shared_indices[threadIdx.x] = shared_indices[threadIdx.x - stride];
-            }
+      int neighbor_idx = threadIdx.x - stride;
+      if (neighbor_idx >= 0 && thread_id >= stride &&
+          parents[thread_id] == parents[thread_id - stride]) {
+        if (shared_temp[threadIdx.x] < shared_temp[neighbor_idx]) {  // Argmax comparison
+          shared_temp[threadIdx.x] = shared_temp[neighbor_idx];
+          shared_indices[threadIdx.x] = shared_indices[neighbor_idx];
         }
-        __syncthreads();
+      }
+      __syncthreads();
     }
 
-    // Store the results of the block reduction
+    // Store block-level results
     if (threadIdx.x == blockDim.x - 1 || 
         thread_id == lenparents - 1 || 
-        parents[thread_id] != parents[thread_id + 1]) {
-        
-        int64_t parent = parents[thread_id];
-        atomicMax(&toptr[parent], shared_indices[threadIdx.x]);
+        (thread_id + 1 < lenparents && parents[thread_id] != parents[thread_id + 1])) {
+      int64_t parent = parents[thread_id];
 
-        // Only the last thread updates block results and parents
-        if (threadIdx.x == blockDim.x - 1 || 
-            thread_id == lenparents - 1 || 
-            parents[thread_id] != parents[thread_id + 1]) {
-            block_results[blockIdx.x] = shared_temp[threadIdx.x];
-            block_parents[blockIdx.x] = parent;  // Ensure block_parents is updated
+      // Validate parent index before updating `toptr`
+      if (parent >= 0 && parent < outlength) {
+        int current_index = shared_indices[threadIdx.x];
+        C current_value = fromptr[current_index];
+
+        // Use atomicCAS to compare values and update `toptr` conditionally
+        bool updated = false;
+        while (!updated) {
+          int existing_index = toptr[parent];
+          if (existing_index == -1) {
+            // If `toptr[parent]` is uninitialized, assign the current index
+            if (atomicCAS(&toptr[parent], -1, current_index) == -1) {
+              updated = true;  // Successfully assigned
+            }
+          } else {
+            // Compare the current value with the existing value
+            C existing_value = fromptr[existing_index];
+            if (current_value > existing_value) {  // Argmax comparison
+              // Attempt to replace the index with the current one
+              if (atomicCAS(&toptr[parent], existing_index, current_index) == existing_index) {
+                updated = true;  // Successfully replaced
+              }
+            } else {
+              // No update needed
+              updated = true;
+            }
+          }
         }
+      } else {
+        // Debugging: Print invalid parent indices
+        printf("Invalid parent index: %lld (thread_id: %lld)\n", parent, thread_id);
+      }
     }
   }
 }
