@@ -1,0 +1,110 @@
+name: CUDA migration comparison
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Migration family to validate
+        required: true
+        type: choice
+        options: [indexed, listarray, listoffsetarray, regulararray, unionarray]
+        default: listoffsetarray
+      candidate-repository:
+        description: Candidate repository
+        required: true
+        default: ianna/awkward
+      candidate-ref:
+        description: Candidate branch or immutable commit matching the selected suite
+        required: true
+        default: ianna/cuda-compute-listoffsetarray
+      baseline-ref:
+        description: Baseline upstream commit
+        required: true
+        default: 7c403344b574980bbb020f98dc2a7b1bd5f80324
+
+permissions:
+  contents: read
+
+# Keep this workflow's runs off the GPU simultaneously. Use an otherwise idle
+# runner; unrelated GPU workflows are not controlled by this concurrency group.
+concurrency:
+  group: cuda-migration-comparison
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    runs-on: self-hosted
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash -l {0}
+    env:
+      SUITE: ${{ inputs.suite }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Require NVIDIA profiler
+        run: |
+          command -v nsys
+          nsys --version
+          nvidia-smi
+      - name: Set up GPU dependencies
+        uses: ./.github/actions/setup-gpu-env
+        with:
+          cuda-version: '13'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: scikit-hep/awkward
+          ref: ${{ inputs.baseline-ref }}
+          path: baseline
+          submodules: true
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.candidate-repository }}
+          ref: ${{ inputs.candidate-ref }}
+          path: candidate
+          submodules: true
+          persist-credentials: false
+      - name: Measure baseline
+        run: |
+          python -m pip install pyyaml
+          python -m pip install --no-deps --force-reinstall ./baseline/awkward-cpp
+          python -m pip install --no-deps -e ./baseline
+          python benchmarks/cuda_migrations/measure.py run --checkout baseline --contracts candidate --suite "$SUITE" --nsys --output results/baseline/report.json
+      - name: Measure candidate
+        run: |
+          python -m pip install --no-deps --force-reinstall ./candidate/awkward-cpp
+          python -m pip install --no-deps -e ./candidate
+          python benchmarks/cuda_migrations/measure.py run --checkout candidate --contracts candidate --suite "$SUITE" --nsys --output results/candidate/report.json
+      - name: Focused end-to-end GPU parity
+        id: focused
+        continue-on-error: true
+        working-directory: candidate
+        run: |
+          case "$SUITE" in
+            indexed) TEST=tests-cuda/test_4484_indexedarray_simplify_compute.py ;;
+            listarray) TEST=tests-cuda/test_4481_listarray_compute.py ;;
+            listoffsetarray) TEST=tests-cuda/test_4483_listoffsetarray_compute.py ;;
+            regulararray) TEST=tests-cuda/test_4485_regulararray_compute.py ;;
+            unionarray) TEST=tests-cuda/test_4486_unionarray_compute.py ;;
+          esac
+          python -m pytest -x -vv --no-cov "$TEST"
+      - name: Compare parity, timings, synchronization, and allocations
+        run: >-
+          python benchmarks/cuda_migrations/measure.py compare
+          --baseline results/baseline/report.json
+          --candidate results/candidate/report.json
+          --output results/comparison.json --require-pass
+      - name: Require focused GPU parity
+        env:
+          FOCUSED_OUTCOME: ${{ steps.focused.outcome }}
+        run: test "$FOCUSED_OUTCOME" = success
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: cuda-migration-comparison-${{ inputs.suite }}
+          path: results/
+          if-no-files-found: warn
