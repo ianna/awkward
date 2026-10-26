@@ -78,7 +78,10 @@ operations and additional malformed/sliced inputs beyond the canonical cases.
   error check. The driver retains every repeat and reports medians, rather than
   hiding variability behind a single measurement.
 * **Synchronization and transfers:** a fresh warmed process captures a single
-  call inside the `measure` NVTX range. Nsight reports runtime/driver API counts
+  call inside the `measure` NVTX range. An outer `capture` range stays open
+  until the stream finishes so asynchronous GPU activity is not truncated.
+  API and allocation timestamps are restricted to `measure`, excluding that
+  completion fence. Nsight reports runtime/driver API counts
   and durations, explicit synchronize calls, blocking memcpy API calls, and
   actual DToH transfer bytes (including array/UVM transfers). Harness reset,
   validation copies and final fences are outside capture. Runtime and driver

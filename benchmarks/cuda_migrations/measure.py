@@ -93,13 +93,25 @@ def nsight_metrics(path):
             row[0]
             for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
+        bounds = None
+        if "NVTX_EVENTS" in tables:
+            ranges = list(
+                db.execute(
+                    "SELECT n.start, n.end FROM NVTX_EVENTS n LEFT JOIN StringIds s ON n.textId=s.id WHERE COALESCE(n.text,s.value)='measure' AND n.end IS NOT NULL"
+                )
+            )
+            if len(ranges) != 1:
+                raise ValueError("Expected exactly one completed measure NVTX range")
+            bounds = ranges[0]
+        result["api_scope"] = "measure" if bounds else "legacy-capture"
         found = False
         for table in ["CUPTI_ACTIVITY_KIND_RUNTIME", "CUPTI_ACTIVITY_KIND_DRIVER"]:
             if table not in tables:
                 continue
             found = True
-            query = f"SELECT s.value, COUNT(*), SUM(a.end-a.start) FROM {table} a JOIN StringIds s ON a.nameId=s.id GROUP BY s.value"
-            for name, count, duration in db.execute(query):
+            where = "WHERE a.start >= ? AND a.start <= ?" if bounds else ""
+            query = f"SELECT s.value, COUNT(*), SUM(a.end-a.start) FROM {table} a JOIN StringIds s ON a.nameId=s.id {where} GROUP BY s.value"
+            for name, count, duration in db.execute(query, bounds or ()):
                 result["api_calls"][f"{table}:{name}"] = {
                     "count": count,
                     "total_ns": duration,
@@ -138,7 +150,14 @@ def nsight_metrics(path):
         if "CUDA_GPU_MEMORY_USAGE_EVENTS" in tables:
             live = {}
             query = "SELECT m.start, m.address, m.bytes, m.memKind, COALESCE(e.name,'unknown') FROM CUDA_GPU_MEMORY_USAGE_EVENTS m LEFT JOIN ENUM_CUDA_DEV_MEM_EVENT_OPER e ON m.memoryOperationType=e.id ORDER BY m.start"
-            for timestamp, address, size, kind, operation in db.execute(query):
+            if bounds:
+                query = query.replace(
+                    " ORDER BY m.start",
+                    " WHERE m.start >= ? AND m.start <= ? ORDER BY m.start",
+                )
+            for timestamp, address, size, kind, operation in db.execute(
+                query, bounds or ()
+            ):
                 memory["events"].append(
                     {
                         "timestamp_ns": timestamp,
@@ -267,6 +286,21 @@ def environment(cp, checkout):
     }
 
 
+def capture_call(nvtx, call, finish):
+    # The outer capture must include completion of asynchronously launched work.
+    # Only APIs inside the inner range count toward the measured operation.
+    nvtx.RangePush("capture")
+    try:
+        nvtx.RangePush("measure")
+        try:
+            call()
+        finally:
+            nvtx.RangePop()
+            finish()
+    finally:
+        nvtx.RangePop()
+
+
 def worker(args):
     import cupy as cp
 
@@ -350,6 +384,7 @@ def worker(args):
         "suite": args.suite,
         "contract_hash": contract_hash,
         "settings": {
+            "capture_version": 2,
             "iterations": args.iterations,
             "repeats": args.repeats,
             "warmup": args.warmup,
@@ -394,9 +429,7 @@ def worker(args):
                 if args.trace_case:
                     reset()
                     stream.synchronize()
-                    cp.cuda.nvtx.RangePush("measure")
-                    call()
-                    cp.cuda.nvtx.RangePop()
+                    capture_call(cp.cuda.nvtx, call, stream.synchronize)
                     cuda.synchronize_cuda(stream)
                     return
                 samples = []
@@ -460,7 +493,7 @@ def worker(args):
                         "--sample=none",
                         "--capture-range=nvtx",
                         "--env-var=NSYS_NVTX_PROFILER_REGISTER_ONLY=0",
-                        "--nvtx-capture=measure",
+                        "--nvtx-capture=capture",
                         "--capture-range-end=stop",
                         "--force-overwrite=true",
                         f"--output={trace}",

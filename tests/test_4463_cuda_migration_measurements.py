@@ -272,3 +272,50 @@ def test_worker_resets_inout_scratch(tmp_path, monkeypatch):
     assert len(data["measurements"]) == 3
     assert len(calls) == len(data["parity"]) + 3 * 7
     assert all(x["cuda_trace"] is None for x in data["measurements"])
+
+
+def test_capture_waits_before_stopping():
+    events = []
+    stack = []
+
+    def push(name):
+        stack.append(name)
+        events.append(name)
+
+    def pop():
+        events.append("end-" + stack.pop())
+
+    measure.capture_call(
+        SimpleNamespace(RangePush=push, RangePop=pop),
+        lambda: events.append("launch"),
+        lambda: events.append("finish"),
+    )
+    assert events == [
+        "capture",
+        "measure",
+        "launch",
+        "end-measure",
+        "finish",
+        "end-capture",
+    ]
+
+
+def test_capture_fence_excluded_from_api_counts(tmp_path):
+    path = tmp_path / "scoped.sqlite"
+    with sqlite3.connect(path) as db:
+        db.executescript("""
+          CREATE TABLE StringIds(id INTEGER,value TEXT);
+          INSERT INTO StringIds VALUES (1,'cudaStreamSynchronize'),(2,'measure');
+          CREATE TABLE NVTX_EVENTS(start INTEGER,end INTEGER,text TEXT,textId INTEGER);
+          INSERT INTO NVTX_EVENTS VALUES (10,20,NULL,2);
+          CREATE TABLE CUPTI_ACTIVITY_KIND_RUNTIME(nameId INTEGER,start INTEGER,end INTEGER);
+          INSERT INTO CUPTI_ACTIVITY_KIND_RUNTIME VALUES (1,12,14),(1,22,50);
+          CREATE TABLE CUPTI_ACTIVITY_KIND_KERNEL(start INTEGER,end INTEGER);
+          INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (15,40);
+        """)
+    result = measure.nsight_metrics(path)
+    assert result["synchronization_calls"] == 1
+    assert result["synchronization_api_ns"] == 2
+    # The GPU operation can finish after its asynchronous submitting call.
+    assert result["kernel_busy_ns"] == 25
+    assert result["api_scope"] == "measure"
