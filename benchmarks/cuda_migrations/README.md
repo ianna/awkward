@@ -1,6 +1,6 @@
 # CUDA migration validation (#4463)
 
-This harness compares the twelve active migration candidates on the same GPU,
+This harness compares the eleven migration candidates on the same GPU,
 Python environment, dependency versions, CUDA runtime and driver. It does not
 supply benchmark results: real GPU execution is required. The two obsolete
 sorting-range kernels are excluded (removal PR #4488).
@@ -124,3 +124,5 @@ The implementation follows the documented [CuPy memory-hook callbacks](https://d
 and [Nsight SQLite schema](https://docs.nvidia.com/nsight-systems/AnalysisGuide/).
 It avoids deprecated `cupyx.allow_synchronize`, which can miss synchronization
 outside CuPy.
+
+The deprecated `awkward_ListOffsetArray_reduce_local_nextparents_64` converter has no live layout callers and is excluded from parity/performance gates. Its raw ABI remains available in Awkward.
