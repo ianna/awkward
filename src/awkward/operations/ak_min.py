@@ -45,7 +45,8 @@ def min(
     See #ak.sum for a more complete description of nested list and missing
     value (None) handling in reducers.
 
-    NaNs propagate within each group. Use #ak.nanmin to skip NaNs.
+    On the CPU backend, NaNs propagate within each group.
+    Use #ak.nanmin to skip NaNs.
 
     Args:
         array: Array-like data (anything #ak.to_layout recognizes).

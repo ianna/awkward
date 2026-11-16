@@ -1082,38 +1082,6 @@ def awkward_reduce_prod_bool_complex(
     )
 
 
-def _max_with_nan(a, b):
-    if a != a or b != b:
-        return a if a != a else b
-    return a if a > b else b
-
-
-def _lex_max_with_nan(a, b):
-    if a.real != a.real or a.imag != a.imag:
-        return a
-    if b.real != b.real or b.imag != b.imag:
-        return b
-    if a.real > b.real or (a.real == b.real and a.imag > b.imag):
-        return a
-    return b
-
-
-def _min_with_nan(a, b):
-    if a != a or b != b:
-        return a if a != a else b
-    return a if a < b else b
-
-
-def _lex_min_with_nan(a, b):
-    if a.real != a.real or a.imag != a.imag:
-        return a
-    if b.real != b.real or b.imag != b.imag:
-        return b
-    if a.real < b.real or (a.real == b.real and a.imag < b.imag):
-        return a
-    return b
-
-
 def awkward_reduce_max(
     result,
     input_data,
@@ -1125,13 +1093,16 @@ def awkward_reduce_max(
 
     h_init = np.asarray(identity, dtype=input_data.dtype)
 
+    # def max_op(a, b):
+    #     return a if a > b else b
+
     segmented_reduce(
         d_in=input_data,
         d_out=result,
         num_segments=outlength,
         start_offsets_in=start_o,
         end_offsets_in=end_o,
-        op=_max_with_nan if input_data.dtype.kind == "f" else OpKind.MAXIMUM,
+        op=OpKind.MAXIMUM,
         h_init=h_init,
     )
 
@@ -1151,13 +1122,20 @@ def awkward_reduce_max_complex(
 
     h_init = np.asarray(identity + 0.0j, dtype=complex_dtype)
 
+    def lex_max_op(a, b):
+        if a.real > b.real:
+            return a
+        if a.real == b.real and a.imag > b.imag:
+            return a
+        return b
+
     segmented_reduce(
         d_in=input_complex,
         d_out=result_complex,
         num_segments=outlength,
         start_offsets_in=start_o,
         end_offsets_in=end_o,
-        op=_lex_max_with_nan,
+        op=lex_max_op,
         h_init=h_init,
     )
 
@@ -1179,7 +1157,7 @@ def awkward_reduce_min(
         num_segments=outlength,
         start_offsets_in=start_o,
         end_offsets_in=end_o,
-        op=_min_with_nan if input_data.dtype.kind == "f" else OpKind.MINIMUM,
+        op=OpKind.MINIMUM,
         h_init=h_init,
     )
 
@@ -1199,13 +1177,20 @@ def awkward_reduce_min_complex(
 
     h_init = np.asarray(identity + 0.0j, dtype=complex_dtype)
 
+    def lex_min_op(a, b):
+        if a.real < b.real:
+            return a
+        if a.real == b.real and a.imag < b.imag:
+            return a
+        return b
+
     segmented_reduce(
         d_in=input_complex,
         d_out=result_complex,
         num_segments=outlength,
         start_offsets_in=start_o,
         end_offsets_in=end_o,
-        op=_lex_min_with_nan,
+        op=lex_min_op,
         h_init=h_init,
     )
 
