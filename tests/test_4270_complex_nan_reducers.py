@@ -90,10 +90,13 @@ def test_complex256_nan_preserves_extended_precision(component):
     larger = one + np.longdouble(2) ** -60
     data = np.ones(3, dtype=np.complex256)
     getattr(data, component)[:] = [larger, one, one]
-    # The last value must not displace either extremum through a real NaN.
+    # Positional reducers keep their ordering semantics; value extrema propagate NaN.
     data.real[2] = np.nan
     array = ak.Array(data.reshape(1, -1))
     assert ak.argmin(array, axis=-1)[0] == 1
     assert ak.argmax(array, axis=-1)[0] == 0
-    assert_same_components(ak.to_numpy(ak.min(array, axis=-1)), data[1:2])
-    assert_same_components(ak.to_numpy(ak.max(array, axis=-1)), data[0:1])
+    for operation in (ak.min, ak.max):
+        assert_same_components(ak.to_numpy(operation(array, axis=-1)), data[2:3])
+    without_nan = array[:, :2]
+    assert_same_components(ak.to_numpy(ak.min(without_nan, axis=-1)), data[1:2])
+    assert_same_components(ak.to_numpy(ak.max(without_nan, axis=-1)), data[0:1])

@@ -3,6 +3,8 @@
 #define FILENAME(line) FILENAME_FOR_EXCEPTIONS_C("src/cpu-kernels/awkward_reduce_min.cpp", line)
 
 #include "awkward/kernels.h"
+#include <cmath>
+#include <type_traits>
 
 // Per-bin minimum.
 //
@@ -16,12 +18,8 @@
 //     which is Pareto-positive across the matrix we tested.
 //   * `__restrict__` lets the compiler hoist `offsets[bin + 1]` out
 //     of the inner loop instead of reloading on every iteration.
-//   * The branchless `(v < best) ? v : best` form lowers to a SIMD
-//     min when the autovectoriser fires (e.g. `vminps`/`vminpd` on
-//     floats), and to a `cmov` otherwise.
-//   * NaN semantics unchanged: floating-point `<` returns false for
-//     NaN, so `best` stays — matching the original `if` form (and
-//     `np.fmin`'s NaN-skipping behaviour).
+//   * Floating-point bins propagate the first NaN, unlike integer bins,
+//     which only need an ordered comparison.
 template <typename OUT, typename IN>
 ERROR awkward_reduce_min(
   OUT* __restrict__ toptr,
@@ -35,6 +33,12 @@ ERROR awkward_reduce_min(
     OUT best = identity;
     for (int64_t i = start; i < stop; i++) {
       OUT v = static_cast<OUT>(fromptr[i]);
+      if constexpr (std::is_floating_point_v<OUT>) {
+        if (std::isnan(v)) {
+          if (!std::isnan(best)) best = v;
+          break;
+        }
+      }
       best = (v < best) ? v : best;
     }
     toptr[bin] = best;

@@ -4670,6 +4670,10 @@ kernels:
               best = identity
               for i in range(offsets[bin], offsets[bin + 1]):
                   x = fromptr[i]
+                  if x != x:
+                      if best == best:
+                          best = x
+                      break
                   if x > best:
                       best = x
               toptr[bin] = best
@@ -4700,6 +4704,10 @@ kernels:
               for i in range(offsets[bin], offsets[bin + 1]):
                   x = fromptr[i * 2]
                   y = fromptr[i * 2 + 1]
+                  if x != x or y != y:
+                      best_re = x
+                      best_im = y
+                      break
                   if not seen or x > best_re or (x == best_re and y > best_im):
                       best_re = x
                       best_im = y
@@ -4786,6 +4794,10 @@ kernels:
               best = identity
               for i in range(offsets[bin], offsets[bin + 1]):
                   x = fromptr[i]
+                  if x != x:
+                      if best == best:
+                          best = x
+                      break
                   if x < best:
                       best = x
               toptr[bin] = best
@@ -4816,6 +4828,10 @@ kernels:
               for i in range(offsets[bin], offsets[bin + 1]):
                   x = fromptr[i * 2]
                   y = fromptr[i * 2 + 1]
+                  if x != x or y != y:
+                      best_re = x
+                      best_im = y
+                      break
                   if not seen or x < best_re or (x == best_re and y < best_im):
                       best_re = x
                       best_im = y

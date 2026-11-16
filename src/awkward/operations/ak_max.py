@@ -45,7 +45,7 @@ def max(
     See #ak.sum for a more complete description of nested list and missing
     value (None) handling in reducers.
 
-    See also #ak.nanmax.
+    NaNs propagate within each group. Use #ak.nanmax to skip NaNs.
 
     Args:
         array: Array-like data (anything #ak.to_layout recognizes).

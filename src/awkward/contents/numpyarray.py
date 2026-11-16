@@ -173,6 +173,17 @@ def _reduce_extended(reducer, array, offsets, starts, shifts, outlength):
             if identity is None:
                 identity = _numpy.inf if name == "min" else -_numpy.inf
             result = _numpy.full(outlength, identity, dtype=data.dtype)
+            # Argmin/argmax retain their own comparison semantics. For
+            # min/max, a NaN in either component takes precedence.
+            nan_positions = _numpy.flatnonzero(_numpy.isnan(data))
+            if nan_positions.size:
+                next_nan = _numpy.searchsorted(nan_positions, offsets.data[:-1])
+                in_range = next_nan < nan_positions.size
+                candidate = nan_positions[
+                    _numpy.minimum(next_nan, nan_positions.size - 1)
+                ]
+                use_nan = in_range & (candidate < offsets.data[1:])
+                positions[use_nan] = candidate[use_nan]
             found = positions >= 0
             result[found] = data[positions[found]]
             return NumpyArray(result, backend=backend)
@@ -189,6 +200,7 @@ def _reduce_extended(reducer, array, offsets, starts, shifts, outlength):
         identity = _numpy.inf if name == "min" else -_numpy.inf
         result = _numpy.full(outlength, identity, dtype=data.dtype)
         result[found] = uniq[rank[found].astype(np.int64)]
+        result[_numpy.isnan(rank)] = _numpy.nan
         if reducer.initial is not None:
             combine = _numpy.minimum if name == "min" else _numpy.maximum
             result = combine(result, _numpy.asarray(reducer.initial, dtype=data.dtype))
