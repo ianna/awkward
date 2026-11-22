@@ -25,6 +25,9 @@ def worker(args):
     source_path = Path(ak.__file__).resolve()
     assert source_path.is_relative_to(args.source.resolve()), str(source_path)
     reports = {}
+    diagnostic_dir = args.output.parent / args.output.stem
+    if args.diagnostics:
+        diagnostic_dir.mkdir(parents=True, exist_ok=True)
     stream = cp.cuda.Stream(non_blocking=True)
 
     def finish():
@@ -57,6 +60,10 @@ def worker(args):
         for outer_option in (False, True):
             for inner_option in (False, True):
                 for invalid in (False, True):
+                    if args.diagnostics and (
+                        rows != 4096 or width != 8 or outer_option or inner_option
+                    ):
+                        continue
                     index = np.arange(rows, dtype=np.int64) % width
                     inner_index = np.arange(width - 1, -1, -1, dtype=np.int64)
                     if outer_option:
@@ -85,6 +92,8 @@ def worker(args):
                         gpu = ak.to_backend(cpu, "cuda")
                         finish()
                     for consume in (False, True):
+                        if args.diagnostics and invalid and not consume:
+                            continue
                         key = f"{'option' if outer_option else 'indexed'}_{'option' if inner_option else 'indexed'}:{rows}:{width}:{'bounds' if invalid else 'valid'}:{'to_cpu' if consume else 'field'}"
                         expected = None
                         expected_error = None
@@ -116,6 +125,24 @@ def worker(args):
                             for _ in range(args.warmup):
                                 result, errors, _, _ = sample(gpu, consume)
                                 check(result, errors)
+                            if args.diagnostics:
+                                from profiles import diagnose
+
+                                finish()  # discard any warmup/parity queue before profiling
+                                reports[key] = {
+                                    "diagnostics": diagnose(
+                                        lambda gpu=gpu, consume=consume: sample(
+                                            gpu, consume
+                                        ),
+                                        check,
+                                        samples=args.samples,
+                                        directory=diagnostic_dir,
+                                        key=key,
+                                        cupy=cp,
+                                        cleanup=finish,
+                                    )
+                                }
+                                continue
                             hosts, totals = [], []
                             stages = {"call": 0, "finish": 0}
                             for _ in range(args.samples):
@@ -174,10 +201,15 @@ def main():
     parser.add_argument("--samples", type=int, default=100)
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--worker", action="store_true")
+    parser.add_argument("--diagnostics", action="store_true")
     parser.add_argument("--source", type=Path)
     args = parser.parse_args()
     if args.samples < 1 or args.pairs < 1 or args.warmup < 1:
         parser.error("samples, pairs and warmup must be positive")
+    if args.diagnostics and args.pairs != 1:
+        parser.error(
+            "diagnostics require --pairs 1 (separate from unprofiled comparison)"
+        )
     if args.worker:
         worker(args)
         return
@@ -209,6 +241,9 @@ def main():
                     sys.executable,
                     str(Path(__file__).resolve()),
                     "--worker",
+                    "--pairs",
+                    "1",
+                    *(["--diagnostics"] if args.diagnostics else []),
                     "--source",
                     str(source),
                     "--samples",
@@ -226,6 +261,11 @@ def main():
                 "checkout changed during comparison"
             )
             runs[name].append(run)
+    if args.diagnostics:
+        from profiles import write_comparison
+
+        write_comparison(runs, args.output)
+        return
     lines = [
         "# Public IndexedArray deferred-validation comparison",
         "",

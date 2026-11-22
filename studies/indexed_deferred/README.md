@@ -86,3 +86,60 @@ A parity failure aborts the comparison rather than producing a passing report.
 
 GPU execution and timing results for this integration are pending. The earlier
 Della guard-only results do not establish a speedup for these public operations.
+
+## Separate warmed regression diagnostics
+
+The user-reported three-pair Della comparison of baseline `1c44307ec` against
+candidate `fe4d5ff3c` passed CPU output/error parity for all 48 cases, but every
+completed-call median regressed:
+
+| Operation | Candidate / baseline range |
+| --- | ---: |
+| Valid field | 1.077–1.122 |
+| Valid field plus CPU transfer | 1.303–1.362 |
+| Bounds-error field | 1.137–1.217 |
+| Bounds-error field plus CPU transfer | 1.974–2.258 |
+
+Keep this integration experimental. These results do not establish a benefit for
+removing the per-kernel status read. No algorithm changes were made to add the
+following diagnostic mode.
+
+After updating the candidate checkout, run this on a GPU node in the same env:
+
+```bash
+python studies/indexed_deferred/compare.py \
+  --baseline ../awkward-indexed-baseline \
+  --candidate . \
+  --diagnostics --pairs 1 --samples 100 --warmup 5 \
+  --output results/indexed-deferred-diagnostics
+
+cat results/indexed-deferred-diagnostics/diagnostics.md
+```
+
+This selects `indexed_indexed:4096:8` valid field, valid CPU transfer, and bounds
+CPU transfer. Each worker warms the case, runs a wrapper/C-call trace, then runs
+cProfile separately. It captures drain/completion calls, guard construction,
+virtual materialization, context capture/formatting, pooled allocation calls,
+and observed CuPy array `get` counts/bytes and synchronization calls. Nested trace
+host durations overlap; never sum them. The report uses exclusive cProfile self
+time for increases. Built-in hooks that are not observed are marked unavailable,
+not proof that no transfer/synchronization occurred. Nsight is needed for a
+complete CUDA API/device trace.
+
+CPU parity checks and their queued GPU work are completed/drained outside each
+profiled boundary. Raw worker JSON and per-case `.pstats` files retain full call
+statistics and caller relationships. For example, inspect callers with:
+
+```bash
+python - <<'PY'
+import pstats
+pstats.Stats(
+    "results/indexed-deferred-diagnostics/1-candidate/"
+    "indexed_indexed-4096-8-valid-to_cpu.pstats"
+).sort_stats("cumulative").print_callers("synchronize_cuda")
+PY
+```
+
+These passes perturb execution. Use the earlier unprofiled comparison for latency,
+not the trace/cProfile numbers. No production optimization is inferred from the
+diagnostic instrumentation itself.
