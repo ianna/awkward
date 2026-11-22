@@ -55,6 +55,8 @@ def guard_index(index, validation):
     Metadata (dtype/length) remains available without a wait. Existing aliases
     of the original buffer are NOT guarded; only publish the returned index.
     """
+    # CompletionRecord implements check() directly; PendingValidation remains
+    # useful for standalone validators and microbenchmarks.
     data = index.data
 
     def consume():

@@ -1,7 +1,7 @@
 # Pending index validation: isolated prototype
 
 This branch stacks on deferred-status plumbing (#4573, `de517dbb5`). It does not
-change production kernel dispatch, IndexedArray simplify, kernel specifications,
+enable production guard adoption in IndexedArray simplify or change kernel specifications,
 CPU kernels or package versions. AI-assisted implementation and measurements:
 OpenAI Codex.
 
@@ -11,13 +11,26 @@ using its existing materialization boundary for reads and buffer exports. Shape
 and dtype queries require no validation. Derived slices share the validation
 state; failed validation never exposes the partially written raw output.
 
-Only publish the guarded index. Previously exported raw arrays and pointers are
-outside this prototype's protection. The callback must retain invocation-owned
-status/scratch, fence the producer stream, preserve the canonical error/context,
-and retain its own result independently of the stream's pending queue. Simply
-calling `synchronize_cuda` from the callback is insufficient if another drain
-has already consumed the failure. Integration with #4573 needs persistent
-per-invocation completion records before enabling this in production.
+Only publish the guarded index after producer dispatch returns. Previously exported
+raw arrays and pointers are outside this prototype's protection.
+
+`defer_status` now returns the invocation's persistent `CompletionRecord`. Pass
+that record directly to `guard_index(index, completion)`. On first consumption it
+drains the producer stream if necessary. An external drain resolves the same
+record, so success/failure remains available after the queue is reset. No callback
+that merely re-reads the current global stream queue is needed.
+
+The first failing invocation retains its decorated exception. Later invocations
+in that batch are conservatively marked failed with the same error, even if their
+own status was not read; earlier successful invocations retain success. Repeated
+checks raise fresh exception copies so the stored error does not pin drain
+tracebacks or GPU scratch. Resolved records release their stream reference;
+completed batches release status/scratch. Pending checks on the wrong CUDA device
+fail without resolving the record, allowing retry on its producer device.
+
+This extends the prototype's drain behavior; it has not been folded into #4573 or
+adopted by the simplify migration. GPU validation of these new completion-record
+paths is still required.
 
 A successful first consumer still waits for validation. This prototype moves the
 wait to consumption; it does not eliminate that wait or guard subsequent GPU
@@ -42,7 +55,8 @@ Median of process medians, microseconds per boundary:
 
 These are host microbenchmarks, not measurements against a complete main build,
 not a simplify implementation comparison and not public-analysis timings. No GPU
-or CuPy is available locally. CUDA tests and GPU measurements remain pending.
+or CuPy is available locally. The original prototype subsequently passed 15 tests
+on Della; the completion-record additions below still need GPU validation.
 
 ## Della
 
@@ -51,7 +65,9 @@ Use an activated CUDA environment, an allocated GPU node and this checkout.
 ```bash
 python -m pip install --no-build-isolation -e .
 python -m pytest -q --tb=short \
+  tests/test_4484_cuda_deferred_status.py \
   tests/test_4573_cuda_index_guard.py \
+  tests-cuda/test_4484_cuda_deferred_status.py \
   tests-cuda/test_4573_cuda_index_guard.py
 
 python studies/cuda_index_guard/benchmark.py \
@@ -66,3 +82,18 @@ including a simplify kernel or claiming an end-to-end benefit. GPU tests exercis
 nonblocking producer/consumer streams and reject invalid tail data before CUDA
 array-interface export or slice consumption. Run unprofiled; use a separate pass
 for Nsight tracing.
+
+## Original prototype Della results (before completion records)
+
+User-reported GPU run: all 15 tests passed in 6.61 s. Nine alternating batches,
+2,000 iterations each; results below are host microseconds per boundary.
+
+| Boundary | Plain | Guard | Added host time |
+| --- | ---: | ---: | ---: |
+| Construction | 1.271 | 3.799 | 2.529 |
+| Metadata | 0.138 | 0.092 | noise |
+| Validated consumption | 0.555 | 0.593 | 0.038 |
+| First consumption, no-op validation | 0.555 | 4.469 | 3.915 |
+| First consumption, 16-byte status transfer | 16.272 | 21.314 | 5.042 |
+
+These numbers do not validate or measure the new persistent completion records.

@@ -45,3 +45,51 @@ def test_nonblocking_stream_guard(fail, export):
                 assert cp.asnumpy(actual).tolist() == ([2, 0] if export else [0])
     assert calls == [1]
     assert cp.asnumpy(output).tolist() == [2, 9999999 if fail else 0]
+
+
+@pytest.mark.parametrize("fail", [False, True])
+@pytest.mark.parametrize("external_drain", [False, True])
+def test_invocation_completion_survives_stream_drain(fail, external_drain):
+    import awkward._connect.cuda as cuda
+    from awkward._kernels import CudaComputeKernel
+
+    stream = cp.cuda.Stream(non_blocking=True)
+    records = []
+    with stream:
+        output = cp.asarray([2, 9999999 if fail else 0], dtype=cp.int64)
+
+    def decode(value):
+        row, attempt = value
+        return (
+            None
+            if row == 2
+            else ValueError(f"index out of range at row {row}; attempted {attempt}")
+        )
+
+    def impl():
+        status = cp.asarray([1 if fail else 2, 99], dtype=cp.int64)
+        records.append(
+            cuda.defer_status(status, decode, stream=stream, keepalive=(output,))
+        )
+
+    with stream:
+        CudaComputeKernel(impl, ("completion_guard_test",))()
+    guarded = guard_index(ak.index.Index64(output), records[0])
+    if external_drain:
+        if fail:
+            with pytest.raises(ValueError, match="row 1; attempted 99"):
+                cuda.synchronize_cuda(stream)
+        else:
+            cuda.synchronize_cuda(stream)
+    with cp.cuda.Stream(non_blocking=True) as consumer:
+        for _ in range(2):
+            if fail:
+                with pytest.raises(ValueError, match="row 1; attempted 99"):
+                    cp.asarray(guarded.data)
+            else:
+                assert cp.asnumpy(cp.asarray(guarded.data)).tolist() == [2, 0]
+        consumer.synchronize()
+    cuda.synchronize_cuda(stream)
+    if fail:
+        with pytest.raises(ValueError, match="row 1; attempted 99"):
+            records[0].check()

@@ -2,8 +2,10 @@
 
 
 import contextvars
+import copy
 import glob
 import os
+from threading import RLock
 
 import numpy
 
@@ -109,6 +111,49 @@ def populate_kernel_errors(kernel_name, cu_file):
 
 
 _active_invocation = contextvars.ContextVar("awkward_cuda_invocation", default=None)
+_drain_lock = RLock()
+
+
+class CompletionRecord:
+    """Persistent, host-side outcome of one invocation, independent of its queue.
+
+    A guarded buffer may retain this record after the stream batch is drained.
+    Failed batches cancel later invocations conservatively: their partial output
+    must never become readable just because their own status was not inspected.
+    No device buffers or operation arguments are retained after completion.
+    """
+
+    def __init__(self):
+        self._resolved = False
+        self._error = None
+        self._stream = None
+        self._device_id = None
+
+    def check(self):
+        if not self._resolved:
+            with _drain_lock:
+                if not self._resolved:
+                    if self._stream is None:
+                        raise RuntimeError("completion record has no registered stream")
+                    if import_cupy().cuda.runtime.getDevice() != self._device_id:
+                        raise RuntimeError(
+                            "completion must be drained on its producer device"
+                        )
+                    synchronize_cuda(self._stream)
+                    if not self._resolved:
+                        raise RuntimeError(
+                            "completion was not resolved by its stream drain"
+                        )
+        if self._error is not None:
+            # Never raise the stored exception itself: its traceback would pin
+            # completed batches and their scratch through the persistent record.
+            raise copy.copy(self._error).with_traceback(None)
+
+    def _resolve(self, error):
+        if not self._resolved:
+            self._error = error
+            self._stream = None
+            self._resolved = True
 
 
 def defer_status(status, decode, *, stream, keepalive=()):
@@ -119,6 +164,7 @@ def defer_status(status, decode, *, stream, keepalive=()):
     read occurs here. The producer must enqueue on ``stream`` and guard unsafe
     downstream reads/writes on device; registration alone does not do that.
     Scratch must be private to the invocation and remain unmodified until drain.
+    Returns a persistent CompletionRecord suitable for guard_index validation.
     """
     active = _active_invocation.get()
     if active is None:
@@ -126,11 +172,17 @@ def defer_status(status, decode, *, stream, keepalive=()):
     invocation, stream_ptr, device_id = active
     if stream.ptr != stream_ptr or status.device.id != device_id:
         raise ValueError("deferred status must belong to the invocation stream/device")
+    if invocation.completion._resolved:
+        raise RuntimeError("cannot register status after invocation completion")
+    invocation.completion._device_id = device_id
+    invocation.completion._stream = stream
     invocation.deferred_statuses.append((status, decode, keepalive))
+    return invocation.completion
 
 
 class Invocation:
     def __init__(self, name, error_context):
+        self.completion = CompletionRecord()
         self.deferred_statuses = []
         self._name = name
         self._error_context = error_context
@@ -200,36 +252,69 @@ def initialize_cuda_kernels(cupy):
 
 
 def synchronize_cuda(stream=None):
-    cupy = import_cupy("Awkward Arrays with CUDA")
+    with _drain_lock:
+        _synchronize_cuda(stream)
 
+
+def _synchronize_cuda(stream):
+    cupy = import_cupy("Awkward Arrays with CUDA")
     if stream is None:
         stream = cupy.cuda.get_current_stream()
 
     stream.synchronize()
-
-    invocation_index = cuda_streamptr_to_contexts[stream.ptr][0].get().tolist()
-    contexts = cuda_streamptr_to_contexts[stream.ptr][1]
-
-    # Detach the completed batch before decoding, including when decoding raises.
-    cuda_streamptr_to_contexts[stream.ptr] = (cupy.array(NO_ERROR), [])
-    legacy_index = (
-        None if invocation_index == NO_ERROR else int(invocation_index) >> ERROR_BITS
-    )
-    for index, invocation in enumerate(contexts):
-        error = None
-        for status, decode, _keepalive in invocation.deferred_statuses:
-            error = decode(status.get(stream=stream).tolist())
-            if error is not None:
-                break
-        if error is None and index == legacy_index:
-            code = int(invocation_index) & ((1 << ERROR_BITS) - 1)
-            error = ValueError(
-                f"{kernel_errors[invocation.name][code]} in compiled CUDA code ({invocation.name})"
-            )
-        if error is not None:
-            if invocation.error_context is not None:
-                error = invocation.error_context.decorate_exception(type(error), error)
-            raise error
+    batch = cuda_streamptr_to_contexts[stream.ptr]
+    contexts = batch[1]
+    # Detach only after the fence; scratch remains owned until results resolve.
+    with stream:
+        cuda_streamptr_to_contexts[stream.ptr] = (cupy.array(NO_ERROR), [])
+    first_error = None
+    try:
+        invocation_index = batch[0].get(stream=stream).tolist()
+        legacy_index = (
+            None
+            if invocation_index == NO_ERROR
+            else int(invocation_index) >> ERROR_BITS
+        )
+        for index, invocation in enumerate(contexts):
+            if first_error is None:
+                error = None
+                try:
+                    for status, decode, _keepalive in invocation.deferred_statuses:
+                        error = decode(status.get(stream=stream).tolist())
+                        if error is not None:
+                            break
+                    if error is None and index == legacy_index:
+                        code = int(invocation_index) & ((1 << ERROR_BITS) - 1)
+                        error = ValueError(
+                            f"{kernel_errors[invocation.name][code]} in compiled CUDA code ({invocation.name})"
+                        )
+                    if error is not None and invocation.error_context is not None:
+                        error = invocation.error_context.decorate_exception(
+                            type(error), error
+                        )
+                except Exception as decoding_error:
+                    error = decoding_error
+                if error is not None:
+                    # Store a traceback-free copy; decoder tracebacks can own
+                    # buffers even though they never appear in the message.
+                    first_error = copy.copy(error).with_traceback(None)
+                    first_error.__context__ = None
+                    first_error.__cause__ = None
+            invocation.completion._resolve(first_error)
+    except Exception as transfer_error:
+        first_error = copy.copy(transfer_error).with_traceback(None)
+        first_error.__context__ = None
+        first_error.__cause__ = None
+    finally:
+        for invocation in contexts:
+            if not invocation.completion._resolved:
+                invocation.completion._resolve(
+                    first_error or RuntimeError("CUDA status draining interrupted")
+                )
+            if invocation.completion._resolved:
+                invocation.deferred_statuses.clear()
+    if first_error is not None:
+        raise copy.copy(first_error).with_traceback(None)
 
 
 def lazy(array):
