@@ -123,7 +123,7 @@ def test_empty_drain_still_fences_raw_cupy_work():
         done = cp.cuda.Event()
         done.record(stream)
         cuda.synchronize_cuda(stream)
-        assert done.query()
+        assert done.done
         assert cp.asnumpy(output).tolist() == [123] * 1024
 
 
