@@ -111,3 +111,39 @@ def test_guarded_backend_transfer_and_aliases(option, invalid):
                     [20, 10] if layout.length == 2 else [10]
                 )
         cuda.synchronize_cuda(stream)
+
+
+def test_empty_drain_still_fences_raw_cupy_work():
+    with cp.cuda.Stream(non_blocking=True) as stream:
+        cuda.synchronize_cuda(
+            stream
+        )  # clear any earlier batch on a reused stream pointer
+        output = cp.empty(1024, dtype=cp.int64)
+        output.fill(123)
+        done = cp.cuda.Event()
+        done.record(stream)
+        cuda.synchronize_cuda(stream)
+        assert done.query()
+        assert cp.asnumpy(output).tolist() == [123] * 1024
+
+
+def test_invalid_guard_precedes_content_transfer(monkeypatch):
+    transfers = []
+    original = ak.contents.NumpyArray._to_backend
+    with cp.cuda.Stream(non_blocking=True) as stream:
+        content = ak.contents.NumpyArray(cp.asarray([10, 20]))
+        inner = ak.contents.IndexedArray(ak.index.Index64(cp.asarray([1, 0])), content)
+        result = ak.contents.IndexedArray.simplified(
+            ak.index.Index64(cp.asarray([0, 99])), inner
+        )
+
+        def transfer(self, backend):
+            if self is content:
+                transfers.append(1)
+            return original(self, backend)
+
+        monkeypatch.setattr(ak.contents.NumpyArray, "_to_backend", transfer)
+        with pytest.raises(ValueError, match="index out of range"):
+            ak.to_backend(result, "cpu")
+        assert transfers == []
+        cuda.synchronize_cuda(stream)

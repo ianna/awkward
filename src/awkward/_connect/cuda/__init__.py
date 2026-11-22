@@ -114,6 +114,16 @@ _active_invocation = contextvars.ContextVar("awkward_cuda_invocation", default=N
 _drain_lock = RLock()
 
 
+def _copy_error(error):
+    """Copy a cached outcome without sharing mutable notes or traceback owners."""
+    result = copy.copy(error).with_traceback(None)
+    result.__context__ = None
+    result.__cause__ = None
+    if hasattr(error, "__notes__"):
+        result.__notes__ = list(error.__notes__)
+    return result
+
+
 class CompletionRecord:
     """Persistent, host-side outcome of one invocation, independent of its queue.
 
@@ -139,7 +149,15 @@ class CompletionRecord:
                         raise RuntimeError(
                             "completion must be drained on its producer device"
                         )
-                    synchronize_cuda(self._stream)
+                    try:
+                        synchronize_cuda(self._stream)
+                    except Exception:
+                        # Unwinding through a different consumer operation must
+                        # not pretty-print an invalid, CUDA-backed result.
+                        from awkward._errors import ErrorContext
+
+                        ErrorContext.cuda_primary()
+                        raise
                     if not self._resolved:
                         raise RuntimeError(
                             "completion was not resolved by its stream drain"
@@ -147,7 +165,10 @@ class CompletionRecord:
         if self._error is not None:
             # Never raise the stored exception itself: its traceback would pin
             # completed batches and their scratch through the persistent record.
-            raise copy.copy(self._error).with_traceback(None)
+            from awkward._errors import ErrorContext
+
+            ErrorContext.cuda_primary()
+            raise _copy_error(self._error)
 
     def _resolve(self, error):
         if not self._resolved:
@@ -262,7 +283,11 @@ def _synchronize_cuda(stream):
         stream = cupy.cuda.get_current_stream()
 
     stream.synchronize()
-    batch = cuda_streamptr_to_contexts[stream.ptr]
+    batch = cuda_streamptr_to_contexts.get(stream.ptr)
+    if batch is None or not batch[1]:
+        # Still fence raw CuPy work, but an empty invocation queue has no
+        # status to transfer or error word to reallocate/reset.
+        return
     contexts = batch[1]
     # Detach only after the fence; scratch remains owned until results resolve.
     with stream:
@@ -297,14 +322,10 @@ def _synchronize_cuda(stream):
                 if error is not None:
                     # Store a traceback-free copy; decoder tracebacks can own
                     # buffers even though they never appear in the message.
-                    first_error = copy.copy(error).with_traceback(None)
-                    first_error.__context__ = None
-                    first_error.__cause__ = None
+                    first_error = _copy_error(error)
             invocation.completion._resolve(first_error)
     except Exception as transfer_error:
-        first_error = copy.copy(transfer_error).with_traceback(None)
-        first_error.__context__ = None
-        first_error.__cause__ = None
+        first_error = _copy_error(transfer_error)
     finally:
         for invocation in contexts:
             if not invocation.completion._resolved:
@@ -314,7 +335,7 @@ def _synchronize_cuda(stream):
             if invocation.completion._resolved:
                 invocation.deferred_statuses.clear()
     if first_error is not None:
-        raise copy.copy(first_error).with_traceback(None)
+        raise _copy_error(first_error)
 
 
 def lazy(array):

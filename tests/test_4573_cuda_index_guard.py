@@ -184,3 +184,21 @@ def test_ordinary_virtual_conversion_still_requires_materialization():
     with pytest.raises(TypeError, match="not yet materialized"):
         to_nplike(array, target, from_nplike=nplike)
     assert not array.is_materialized
+
+
+@pytest.mark.parametrize("option", [False, True])
+def test_guard_rejects_before_content_transfer(option):
+    from awkward._backends.numpy import NumpyBackend
+
+    class NeverTransfer(ak.contents.NumpyArray):
+        def to_backend(self, backend):
+            raise AssertionError("content transferred before validation")
+
+    def fail():
+        raise ValueError("index out of range")
+
+    index = guard_index(ak.index.Index64(np.array([0, 999])), PendingValidation(fail))
+    cls = ak.contents.IndexedOptionArray if option else ak.contents.IndexedArray
+    layout = cls(index, NeverTransfer(np.array([10, 20])))
+    with pytest.raises(ValueError, match="index out of range"):
+        layout._to_backend(NumpyBackend.instance())

@@ -1785,6 +1785,9 @@ class IndexedOptionArray(IndexedOptionMeta[Content], Content):
         return out
 
     def _to_backend(self, backend: Backend) -> Self:
+        validate = getattr(self._index, "_validate_before_transfer", None)
+        if validate is not None:
+            validate(backend.nplike)
         content = self._content.to_backend(backend)
         index = self._index.to_nplike(backend.nplike)
         return IndexedOptionArray(index, content, parameters=self._parameters)

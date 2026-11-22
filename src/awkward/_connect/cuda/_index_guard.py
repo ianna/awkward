@@ -52,6 +52,12 @@ class PendingValidation:
 
 
 class _GuardedIndexMixin:
+    def _validate_before_transfer(self, nplike):
+        if nplike.known_data:
+            # Reject before copying any content, even when conversion normally
+            # visits content before its index. Typetracer remains metadata-only.
+            maybe_materialize(self.data)
+
     def raw(self, nplike):
         # This buffer already exists: only validation is pending. Ordinary
         # user-created virtual arrays still require explicit materialization.

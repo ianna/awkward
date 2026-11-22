@@ -143,3 +143,26 @@ PY
 These passes perturb execution. Use the earlier unprofiled comparison for latency,
 not the trace/cProfile numbers. No production optimization is inferred from the
 diagnostic instrumentation itself.
+
+## Changes after the first diagnostic pass
+
+The user-reported diagnostic run (`4815b7640`) retained parity. Valid `to_cpu`
+showed two drains instead of one, five observed array gets instead of four, and
+an extra 8-byte transfer. Bounds `to_cpu` showed four gets / 96 bytes instead of
+two / 24 bytes, plus consumer pretty-printing and a second exception decoration.
+These instrumented host durations are not benchmark latencies.
+
+The next candidate adds three targeted changes:
+
+- An empty invocation queue still fences raw CuPy work but does not read or
+  allocate another error word. No queued work is skipped.
+- Completion-record errors capture a metadata-only consumer context before
+  unwinding. Producer and consumer notes are both preserved. Exception copies
+  own their notes lists so repeated consumption cannot mutate the cached error.
+- Guarded indices validate before content transfer to a known-data backend.
+  Failure rejects before copying otherwise-unused content; typetracer conversion
+  stays metadata-only and ordinary indices keep the original transfer order.
+
+These changes leave simplify's validation/reduction/gather operations unchanged.
+Guard construction/materialization still has overhead. Re-run separate diagnostics
+and the alternating unprofiled comparison before claiming any improvement.

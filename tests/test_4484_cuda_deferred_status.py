@@ -316,3 +316,50 @@ def test_status_transfer_failure_is_persistent(state):
     with pytest.raises(RuntimeError, match="status transfer failed"):
         record.check()
     assert invocation.deferred_statuses == []
+
+
+def test_empty_queue_fences_without_status_transfer_or_allocation(state, monkeypatch):
+    fences = []
+    state.synchronize = lambda: fences.append(1)
+    status = Status(cuda.NO_ERROR)
+    cuda.cuda_streamptr_to_contexts[state.ptr] = (status, [])
+
+    def no_allocation(*args):
+        raise AssertionError("empty drain allocated an error buffer")
+
+    monkeypatch.setattr(cuda.cupy, "array", no_allocation)
+    cuda.synchronize_cuda(state)
+    assert fences == [1]
+    assert status.reads == 0
+    cuda.cuda_streamptr_to_contexts.clear()
+    cuda.synchronize_cuda(state)
+    assert fences == [1, 1]
+
+
+@pytest.mark.parametrize("external_drain", [False, True])
+def test_consumer_error_notes_are_metadata_only_and_not_shared(state, external_drain):
+    import awkward as ak
+
+    class ProducerContext:
+        def decorate_exception(self, cls, error):
+            error.add_note("producer")
+            return error
+
+    invocation, _ = enqueue(state, [1, 99], ProducerContext())
+    cuda.cuda_streamptr_to_contexts[state.ptr] = (Status(cuda.NO_ERROR), [invocation])
+    if external_drain:
+        with pytest.raises(ValueError):
+            cuda.synchronize_cuda(state)
+
+    class NeverFormat:
+        def __repr__(self):
+            raise AssertionError("consumer formatted array values")
+
+    for _ in range(2):
+        with pytest.raises(ValueError, match="at 1: 99") as caught:
+            with ak._errors.OperationErrorContext("consumer", [NeverFormat()], {}):
+                invocation.completion.check()
+        assert caught.value.__notes__[0] == "producer"
+        assert "<NeverFormat>" in caught.value.__notes__[1]
+        assert len(caught.value.__notes__) == 2
+    assert invocation.completion._error.__notes__ == ["producer"]
