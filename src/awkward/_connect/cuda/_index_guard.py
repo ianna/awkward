@@ -5,7 +5,10 @@
 from contextvars import ContextVar
 from threading import RLock
 
+from awkward._nplikes import to_nplike
+from awkward._nplikes.array_like import maybe_materialize
 from awkward._nplikes.virtual import VirtualNDArray
+from awkward.index import Index8, Index32, Index64, IndexU8, IndexU32
 
 
 class PendingValidation:
@@ -48,6 +51,55 @@ class PendingValidation:
                     self._validate = None
 
 
+class _GuardedIndexMixin:
+    def raw(self, nplike):
+        # This buffer already exists: only validation is pending. Ordinary
+        # user-created virtual arrays still require explicit materialization.
+        if nplike.known_data:
+            (data,) = maybe_materialize(self.data)
+            return to_nplike(data, nplike, from_nplike=self.nplike)
+        # Typetracer conversion must remain metadata-only.
+        return super().raw(nplike)
+
+    def to64(self):
+        # Preserve the normal dtype-conversion copy semantics. Once checked,
+        # the copied index needs no pending-validation wrapper.
+        (data,) = maybe_materialize(self.data)
+        return Index64(self.nplike.astype(data, dtype=Index64._expected_dtype))
+
+
+class _GuardedIndex8(_GuardedIndexMixin, Index8):
+    pass
+
+
+class _GuardedIndexU8(_GuardedIndexMixin, IndexU8):
+    pass
+
+
+class _GuardedIndex32(_GuardedIndexMixin, Index32):
+    pass
+
+
+class _GuardedIndexU32(_GuardedIndexMixin, IndexU32):
+    pass
+
+
+class _GuardedIndex64(_GuardedIndexMixin, Index64):
+    pass
+
+
+_guarded_index_classes = {
+    cls._expected_dtype: cls
+    for cls in (
+        _GuardedIndex8,
+        _GuardedIndexU8,
+        _GuardedIndex32,
+        _GuardedIndexU32,
+        _GuardedIndex64,
+    )
+}
+
+
 def guard_index(index, validation):
     """Wrap an already allocated index without reading or changing its data.
 
@@ -65,7 +117,9 @@ def guard_index(index, validation):
         return data
 
     buffer = VirtualNDArray(index.nplike, (index.length,), index.dtype, consume)
-    return type(index)(buffer, metadata=index._metadata, nplike=index.nplike)
+    return _guarded_index_classes[index.dtype](
+        buffer, metadata=index._metadata, nplike=index.nplike
+    )
 
 
 _defer_simplify = ContextVar("awkward_defer_indexed_simplify", default=False)

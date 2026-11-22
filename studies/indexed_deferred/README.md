@@ -6,7 +6,9 @@ prototype. AI-assisted implementation/tests: OpenAI Codex.
 
 Only the public IndexedArray/IndexedOptionArray `simplified` constructors opt in.
 They register status, retain input/output/workspace, and wrap the output index
-before publication. Direct calls to the kernel keep their synchronous KernelError
+before publication. Guarded index subclasses validate before backend transfer;
+ordinary user-created virtual arrays keep their explicit-materialization rule.
+Direct calls to the kernel keep their synchronous KernelError
 contract, including canonical first-error position/attempt and untouched tail.
 CPU/JAX/typetracer execution remains on the original constructor path. No native
 implementation, canonical signature, dependency or package version changes.

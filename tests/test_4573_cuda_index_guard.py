@@ -113,3 +113,74 @@ def test_simplify_index_scope_and_guard(fail):
             result[0]
     else:
         assert result[1] == 1
+
+
+@pytest.mark.parametrize("dtype", [np.int8, np.uint8, np.int32, np.uint32, np.int64])
+@pytest.mark.parametrize("fail", [False, True])
+def test_guarded_raw_conversion_and_aliases(dtype, fail, monkeypatch):
+    import awkward._connect.cuda._index_guard as module
+    from awkward._nplikes.numpy import Numpy
+
+    calls = []
+    transfers = []
+    actual = module.to_nplike
+
+    def validate():
+        calls.append("validated")
+        if fail:
+            raise ValueError("index out of range")
+
+    def convert(array, nplike, *, from_nplike):
+        # Reproduce the cross-backend entry point: conversion must receive an
+        # actual validated array, never an unmaterialized VirtualNDArray.
+        assert isinstance(array, np.ndarray)
+        transfers.append("transferred")
+        return actual(array, nplike, from_nplike=from_nplike)
+
+    monkeypatch.setattr(module, "to_nplike", convert)
+    source = ak.index.Index(np.array([2, 0, 1], dtype=dtype))
+    guarded = guard_index(source, PendingValidation(validate))
+    aliases = [guarded, guarded[1:], copy.copy(guarded)]
+    assert calls == []
+    for alias in aliases:
+        if fail:
+            with pytest.raises(ValueError, match="index out of range"):
+                alias.to_nplike(Numpy.instance())
+        else:
+            np.testing.assert_array_equal(
+                alias.raw(Numpy.instance()), [0, 1] if alias.length == 2 else [2, 0, 1]
+            )
+    assert calls == ["validated"]
+    assert len(transfers) == (0 if fail else 3)
+
+
+def test_guarded_to64_copies_and_typetracer_stays_lazy():
+    from awkward._nplikes.typetracer import TypeTracer
+
+    calls = []
+    original = np.array([2, 0, 1], dtype=np.int32)
+    guarded = guard_index(
+        ak.index.Index32(original), PendingValidation(lambda: calls.append(1))
+    )
+    traced = guarded.to_nplike(TypeTracer.instance())
+    assert traced.length == 3
+    assert calls == []
+    converted = guarded.to64()
+    assert calls == [1]
+    assert converted.dtype == np.dtype(np.int64)
+    assert not np.shares_memory(converted.data, original)
+
+
+def test_ordinary_virtual_conversion_still_requires_materialization():
+    from types import SimpleNamespace
+
+    from awkward._nplikes import to_nplike
+    from awkward._nplikes.numpy import Numpy
+    from awkward._nplikes.virtual import VirtualNDArray
+
+    nplike = Numpy.instance()
+    array = VirtualNDArray(nplike, (3,), np.dtype(np.int64), lambda: np.arange(3))
+    target = SimpleNamespace(known_data=True, supports_virtual_arrays=True)
+    with pytest.raises(TypeError, match="not yet materialized"):
+        to_nplike(array, target, from_nplike=nplike)
+    assert not array.is_materialized

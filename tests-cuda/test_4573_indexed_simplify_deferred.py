@@ -87,3 +87,27 @@ def test_chained_field_selection_guards_previous_output():
         with pytest.raises(ValueError, match="index out of range"):
             ak.to_backend(result, "cpu")
         cuda.synchronize_cuda(stream)
+
+
+@pytest.mark.parametrize("option", [False, True])
+@pytest.mark.parametrize("invalid", [False, True])
+def test_guarded_backend_transfer_and_aliases(option, invalid):
+    cls = ak.contents.IndexedOptionArray if option else ak.contents.IndexedArray
+    with cp.cuda.Stream(non_blocking=True) as stream:
+        inner = cls(
+            ak.index.Index64(cp.asarray([1, 0])),
+            ak.contents.NumpyArray(cp.asarray([10, 20])),
+        )
+        guarded = cls.simplified(
+            ak.index.Index64(cp.asarray([0, 99 if invalid else 1])), inner
+        )
+        assert isinstance(guarded.index.data, VirtualNDArray)
+        for layout in (guarded, guarded[1:]):
+            if invalid:
+                with pytest.raises(ValueError, match="index out of range"):
+                    ak.to_backend(layout, "cpu", highlevel=False)
+            else:
+                assert ak.to_backend(layout, "cpu", highlevel=False).to_list() == (
+                    [20, 10] if layout.length == 2 else [10]
+                )
+        cuda.synchronize_cuda(stream)
