@@ -1,7 +1,7 @@
 # Guarded public IndexedArray simplification
 
 Experimental integration based on PR #4484 at
-`efbe2a47b3642ee5850f972ff4932df2f07b7f0a`, plus the deferred-status and guard
+`1c44307ec0fee1e6bf2fc06cef5ae49f4d093918`, including the null-count stream import fix, plus the deferred-status and guard
 prototype. AI-assisted implementation/tests: OpenAI Codex.
 
 Only the public IndexedArray/IndexedOptionArray `simplified` constructors opt in.
@@ -32,7 +32,7 @@ git -C awkward-matrix worktree add --detach \
   ../awkward-indexed-deferred FETCH_HEAD
 
 git -C awkward-matrix worktree add --detach \
-  ../awkward-indexed-baseline efbe2a47b3642ee5850f972ff4932df2f07b7f0a
+  ../awkward-indexed-baseline 1c44307ec0fee1e6bf2fc06cef5ae49f4d093918
 
 # Generate canonical signatures in both fresh worktrees (requires PyYAML).
 python awkward-indexed-baseline/dev/generate-kernel-signatures.py
