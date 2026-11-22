@@ -3604,9 +3604,10 @@ def awkward_IndexedArray_simplify(
         from awkward._connect.cuda._indexedarray import simplify_status
 
         if _defer_simplify.get():
-            from awkward._connect.cuda import defer_status
+            from awkward._connect.cuda import compact_error_state, defer_status
 
             scratch = []
+            word, ordinal = compact_error_state()
             status = simplify_status(
                 toindex,
                 outerindex,
@@ -3614,6 +3615,7 @@ def awkward_IndexedArray_simplify(
                 innerindex,
                 innerlength,
                 keepalive=scratch,
+                error_state=(word.reshape(1), ordinal),
             )
 
             def decode(values):
@@ -3632,7 +3634,8 @@ def awkward_IndexedArray_simplify(
                 status,
                 decode,
                 stream=cp.cuda.get_current_stream(),
-                keepalive=(toindex, outerindex, innerindex, *scratch),
+                keepalive=(toindex, outerindex, innerindex, word, *scratch),
+                compact=True,
             )
         row, attempt = (
             simplify_status(toindex, outerindex, outerlength, innerindex, innerlength)

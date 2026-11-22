@@ -368,7 +368,7 @@ def prepared_implementation():
             time.sleep(0.0001)
             events.append(("transform", kwargs["num_items"]))
             for i in range(kwargs["num_items"]):
-                value = operation(i)
+                value = operation(np.int64(kwargs["d_in"].start + i))
                 if not isinstance(kwargs["d_out"], _Discard):
                     kwargs["d_out"][i] = value
 
@@ -417,6 +417,10 @@ def prepared_implementation():
         "make_unary_transform": prepare,
         "make_reduce_into": prepare_reduce,
     }
+    from awkward._connect.cuda import COMPACT_ERROR_CODE, ERROR_BITS
+
+    namespace["COMPACT_ERROR_CODE"] = COMPACT_ERROR_CODE
+    namespace["ERROR_BITS"] = ERROR_BITS
     namespace["__name__"] = "awkward._connect.cuda._indexedarray"
     path = CUDA_SOURCE / "_indexedarray.py"
     tree = ast.parse(path.read_text())
@@ -638,7 +642,9 @@ def test_null_count_reduction_uses_current_stream_and_output_width(values):
     assert output.tolist() == [sum(x < 0 for x in values), 0x1234567800000000]
 
 
-@pytest.mark.parametrize("length,error_row", [(32, None), (32, 1), (129, None), (129, 100)])
+@pytest.mark.parametrize(
+    "length,error_row", [(32, None), (32, 1), (129, None), (129, 100)]
+)
 def test_deferred_prepared_registration_has_no_host_read(
     length, error_row, prepared_implementation, implementation, monkeypatch
 ):
@@ -654,11 +660,14 @@ def test_deferred_prepared_registration_has_no_host_read(
     monkeypatch.setitem(sys.modules, module.__name__, module)
     registered = []
 
-    def register(status, decode, *, stream, keepalive):
+    def register(status, decode, *, stream, keepalive, compact=False):
+        assert compact
         registered.append((status, decode, keepalive))
         return "completion"
 
     monkeypatch.setattr(cuda, "defer_status", register)
+    word = np.asarray([cuda.NO_ERROR], dtype=np.uint64).view(buffer)
+    monkeypatch.setattr(cuda, "compact_error_state", lambda: (word, 7))
     args = large_case(length, error_row)
     device = [x.copy().view(buffer) if isinstance(x, np.ndarray) else x for x in args]
     expected = copy.deepcopy(args)
@@ -677,5 +686,45 @@ def test_deferred_prepared_registration_has_no_host_read(
     assert (actual is not None) == bool(error.str)
     if actual is not None:
         assert (actual.id, actual.attempt) == (error.id, error.attempt)
-    assert len(keepalive) == (4 if length > 64 else 3)
+    assert len(keepalive) == (5 if length > 64 else 4)
     np.testing.assert_array_equal(device[0], expected[0])
+
+
+@pytest.mark.parametrize("length", [32, 129])
+@pytest.mark.parametrize("ordinal", [0, 7, 63])
+@pytest.mark.parametrize("invalid", [False, True])
+def test_compact_publication_matches_cpu_and_uses_runtime_ordinal(
+    length, ordinal, invalid, prepared_implementation
+):
+    namespace, buffer, _ = prepared_implementation
+    args = large_case(length, length - 1 if invalid else None)
+    expected = copy.deepcopy(args)
+    error = NumpyBackend.instance()[
+        "awkward_IndexedArray_simplify", np.int64, np.int64, np.int64
+    ](*expected)
+    device = [x.copy().view(buffer) if isinstance(x, np.ndarray) else x for x in args]
+    word = np.asarray([np.iinfo(np.uint64).max], dtype=np.uint64).view(buffer)
+    status = namespace["simplify_status"](*device, error_state=(word, ordinal))
+    assert int(word[0]) == (ordinal * 256 + 255 if invalid else np.iinfo(np.uint64).max)
+    assert (status[0] < length) == bool(error.str)
+    if invalid:
+        assert (int(status[0]), int(status[1])) == (error.id, error.attempt)
+    np.testing.assert_array_equal(device[0], expected[0])
+
+
+def test_compact_publication_preserves_earlier_error_and_prepared_reuse(
+    prepared_implementation,
+):
+    namespace, buffer, events = prepared_implementation
+    args = large_case(129, 100)
+    for ordinal in (7, 8, 12):
+        device = [
+            x.copy().view(buffer) if isinstance(x, np.ndarray) else x for x in args
+        ]
+        word = np.asarray([2 * 256], dtype=np.uint64).view(buffer)
+        if ordinal != 7:
+            events.clear()
+        namespace["simplify_status"](*device, error_state=(word, ordinal))
+        assert int(word[0]) == 2 * 256
+        if ordinal != 7:
+            assert not any(event[0].startswith("prepare") for event in events)

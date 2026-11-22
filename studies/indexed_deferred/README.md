@@ -166,3 +166,10 @@ The next candidate adds three targeted changes:
 These changes leave simplify's validation/reduction/gather operations unchanged.
 Guard construction/materialization still has overhead. Re-run separate diagnostics
 and the alternating unprofiled comparison before claiming any improvement.
+
+## Compact indicator variant
+
+This branch additionally prototypes payload-on-failure draining with a shared
+stream word. See [COMPACT.md](COMPACT.md) for its protocol, benchmark-boundary
+correction and separate Della checkout/validation commands. Results from the
+previous guarded candidate are not results for this variant.

@@ -120,6 +120,11 @@ def worker(args):
                             else:
                                 assert not errors, (key, errors)
                                 assert ak.to_list(result) == expected, key
+                            # Parity conversion may enqueue its own kernels. Do
+                            # not carry that work or invocation ordinals into
+                            # the next measured sample on either checkout.
+                            finish()
+                            stream.synchronize()
 
                         with stream:
                             for _ in range(args.warmup):
@@ -139,7 +144,7 @@ def worker(args):
                                         directory=diagnostic_dir,
                                         key=key,
                                         cupy=cp,
-                                        cleanup=finish,
+                                        cleanup=stream.synchronize,
                                     )
                                 }
                                 continue
@@ -271,7 +276,7 @@ def main():
         "",
         f"Baseline: `{git_sha(sources['baseline'])}`; candidate: `{git_sha(sources['candidate'])}`.",
         "",
-        "All samples passed CPU output/error parity. Three alternating fresh-process pairs by default. Inputs, JIT warmup and comparisons are outside timing. Completed calls include result construction, producer-stream completion and error draining. `to_cpu` additionally includes consuming/transporting the result. No profiling is enabled. Values are medians of per-process medians; timing ratios are candidate / baseline.",
+        "All samples passed CPU output/error parity. Three alternating fresh-process pairs by default. Inputs, JIT warmup and comparisons are outside timing. Parity-side work and invocation queues are drained outside timing. Completed calls include result construction, producer-stream completion and error draining. `to_cpu` additionally includes consuming/transporting the result. No profiling is enabled. Values are medians of per-process medians; timing ratios are candidate / baseline.",
         "",
         "| Case | Baseline completed us | Candidate completed us | Ratio |",
         "| --- | ---: | ---: | ---: |",

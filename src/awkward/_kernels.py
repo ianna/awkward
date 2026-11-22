@@ -274,7 +274,11 @@ class CudaComputeKernel(BaseKernel):
             name=self.key[0],
             error_context=ak._errors.ErrorContext.cuda_primary(),
         )
-        ak_cuda.cuda_streamptr_to_contexts[cupy_stream_ptr][1].append(invocation)
+        invocation.error_word, pending = ak_cuda.cuda_streamptr_to_contexts[
+            cupy_stream_ptr
+        ]
+        invocation.error_index = len(pending)
+        pending.append(invocation)
         token = ak_cuda._active_invocation.set(
             (invocation, cupy_stream_ptr, cupy.cuda.Device().id)
         )

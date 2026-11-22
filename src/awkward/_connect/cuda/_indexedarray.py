@@ -13,6 +13,7 @@ from cuda.compute import (
 )
 from cuda.compute.op import make_op_adapter
 
+from awkward._connect.cuda import COMPACT_ERROR_CODE, ERROR_BITS
 from awkward._nplikes.cupy import Cupy
 from awkward._nplikes.numpy import Numpy
 
@@ -64,13 +65,18 @@ class _ArrayState:
 
 
 class _Simplify:
-    def __init__(self, output_dtype, outer_dtype, inner_dtype, length, innerlength):
+    def __init__(
+        self, output_dtype, outer_dtype, inner_dtype, length, innerlength, publish=False
+    ):
+        stride, code = 1 << ERROR_BITS, COMPACT_ERROR_CODE
         self.output = output = _ArrayState(output_dtype)
         self.outer = outer = _ArrayState(outer_dtype)
         self.inner = inner = _ArrayState(inner_dtype)
         self.status = status = _ArrayState(np.int64)
 
-        def small(_):
+        self.error_word = error_word = _ArrayState(np.uint64)
+
+        def small(invocation):
             # CCCL substitutes device arrays for metadata proxies.
             # pylint: disable=unsupported-assignment-operation
             status[0] = length
@@ -82,6 +88,12 @@ class _Simplify:
                     status[1] = index
                     break
                 output[row] = -1 if index < 0 else np.int64(inner[index])
+            if publish and status[0] < length:
+                encoded = np.uint64(invocation * stride + code)
+                # Only this work item writes, and launches on this stream are
+                # ordered. Preserve an earlier legacy or compact error.
+                if encoded < error_word[0]:
+                    error_word[0] = encoded
             return np.int8(0)
 
         def combine(left, right):
@@ -100,7 +112,8 @@ class _Simplify:
                     b = right
             return a if a < b else b
 
-        def write(row):
+        def write(item):
+            row = item % length if publish else item
             # pylint: disable=unsupported-assignment-operation
             first = status[0]
             if row < first:
@@ -112,6 +125,10 @@ class _Simplify:
                     if first < length
                     else np.int64(9223372036854775807)
                 )
+                if publish and first < length:
+                    encoded = np.uint64((item // length) * stride + code)
+                    if encoded < error_word[0]:
+                        error_word[0] = encoded
             return np.int8(0)
 
         self.small, self.combine, self.write = small, combine, write
@@ -124,7 +141,7 @@ class _Simplify:
         self.reduce_operation = None
         self.initial = np.asarray(length, dtype=np.int64)
 
-    def transform(self, name, operation, output, length, stream):
+    def transform(self, name, operation, output, length, stream, *, start=0):
         if name not in self.transforms:
             adapter = make_op_adapter(operation)
             prepared = make_unary_transform(
@@ -133,23 +150,30 @@ class _Simplify:
             self.transforms[name] = (adapter, prepared)
         adapter, prepared = self.transforms[name]
         prepared(
-            d_in=self.iterator,
+            d_in=self.iterator if start == 0 else CountingIterator(np.int64(start)),
             d_out=output,
             op=adapter,
             num_items=length,
             stream=stream,
         )
 
-    def __call__(self, output, outer, inner, stream, keepalive=None):
+    def __call__(self, output, outer, inner, stream, keepalive=None, error_state=None):
         # Status and reduction workspace belong to this invocation; cached
         # operators retain only descriptors. The small path remains fused.
         status = cp.empty(2, dtype=cp.int64)
-        states = (self.output, self.outer, self.inner, self.status)
-        for state, array in zip(states, (output, outer, inner, status), strict=True):
+        states = (self.output, self.outer, self.inner, self.status, self.error_word)
+        word, invocation = (
+            error_state if error_state is not None else (status.view(np.uint64), 0)
+        )
+        for state, array in zip(
+            states, (output, outer, inner, status, word), strict=True
+        ):
             state.bind(array)
         try:
             if self.length <= 64:
-                self.transform("small", self.small, self.discard, 1, stream)
+                self.transform(
+                    "small", self.small, self.discard, 1, stream, start=invocation
+                )
             else:
                 first = status[:1]
                 if self.reducer is None:
@@ -178,7 +202,14 @@ class _Simplify:
                 if keepalive is not None:
                     keepalive.append(storage)
                 self.reducer(temp_storage=storage, **arguments)
-                self.transform("write", self.write, self.discard, self.length, stream)
+                self.transform(
+                    "write",
+                    self.write,
+                    self.discard,
+                    self.length,
+                    stream,
+                    start=invocation * self.length,
+                )
         finally:
             for state in states:
                 state.clear()
@@ -187,12 +218,23 @@ class _Simplify:
 
 @lru_cache(maxsize=32)
 def _setup(
-    device, context, output_dtype, outer_dtype, inner_dtype, length, innerlength
+    device,
+    context,
+    output_dtype,
+    outer_dtype,
+    inner_dtype,
+    length,
+    innerlength,
+    publish=False,
 ):
-    return _Simplify(output_dtype, outer_dtype, inner_dtype, length, innerlength)
+    return _Simplify(
+        output_dtype, outer_dtype, inner_dtype, length, innerlength, publish
+    )
 
 
-def simplify_status(output, outer, length, inner, innerlength, *, keepalive=None):
+def simplify_status(
+    output, outer, length, inner, innerlength, *, keepalive=None, error_state=None
+):
     with _lock:
         setup = _setup(
             cp.cuda.runtime.getDevice(),
@@ -202,5 +244,13 @@ def simplify_status(output, outer, length, inner, innerlength, *, keepalive=None
             inner.dtype.str,
             length,
             innerlength,
+            error_state is not None,
         )
-        return setup(output, outer, inner, _Stream(), keepalive=keepalive)
+        return setup(
+            output,
+            outer,
+            inner,
+            _Stream(),
+            keepalive=keepalive,
+            error_state=error_state,
+        )

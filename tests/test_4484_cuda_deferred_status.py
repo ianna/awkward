@@ -363,3 +363,90 @@ def test_consumer_error_notes_are_metadata_only_and_not_shared(state, external_d
         assert "<NeverFormat>" in caught.value.__notes__[1]
         assert len(caught.value.__notes__) == 2
     assert invocation.completion._error.__notes__ == ["producer"]
+
+
+def compact_invocation(stream, word, ordinal, values):
+    invocation = cuda.Invocation("compact", None)
+    invocation.error_word = word
+    invocation.error_index = ordinal
+    payload = Status(values)
+    token = cuda._active_invocation.set((invocation, stream.ptr, 0))
+    try:
+        assert cuda.compact_error_state() == (word, ordinal)
+        cuda.defer_status(payload, decode, stream=stream, compact=True)
+    finally:
+        cuda._active_invocation.reset(token)
+    return invocation, payload
+
+
+def test_compact_success_reads_only_shared_word(state):
+    word = Status(cuda.NO_ERROR)
+    first, a = compact_invocation(state, word, 0, [-1, 0])
+    second, b = compact_invocation(state, word, 1, [-1, 0])
+    cuda.cuda_streamptr_to_contexts[state.ptr] = (word, [first, second])
+    cuda.synchronize_cuda(state)
+    assert word.reads == 1
+    assert a.reads == b.reads == 0
+    first.completion.check()
+    second.completion.check()
+    assert not first.deferred_statuses
+
+
+def test_compact_error_reads_only_first_payload(state):
+    word = Status((1 << cuda.ERROR_BITS) + cuda.COMPACT_ERROR_CODE)
+    invocations, statuses = zip(
+        *(
+            compact_invocation(state, word, i, [-1, 0] if i == 0 else [2, 99])
+            for i in range(3)
+        ),
+        strict=True,
+    )
+    cuda.cuda_streamptr_to_contexts[state.ptr] = (word, list(invocations))
+    with pytest.raises(ValueError, match="at 2: 99"):
+        cuda.synchronize_cuda(state)
+    assert [status.reads for status in statuses] == [0, 1, 0]
+    invocations[0].completion.check()
+    for invocation in invocations[1:]:
+        with pytest.raises(ValueError, match="at 2: 99"):
+            invocation.completion.check()
+
+
+@pytest.mark.parametrize("legacy_first", [False, True])
+def test_compact_legacy_ordering(state, monkeypatch, legacy_first):
+    compact_index = 1 if legacy_first else 0
+    value = 0 if legacy_first else cuda.COMPACT_ERROR_CODE
+    word = Status(value)
+    invocation, payload = compact_invocation(state, word, compact_index, [3, 99])
+    legacy = cuda.Invocation("legacy", None)
+    monkeypatch.setitem(cuda.kernel_errors, "legacy", ["legacy error"])
+    contexts = [legacy, invocation] if legacy_first else [invocation, legacy]
+    cuda.cuda_streamptr_to_contexts[state.ptr] = (word, contexts)
+    with pytest.raises(
+        ValueError, match="legacy error" if legacy_first else "at 3: 99"
+    ):
+        cuda.synchronize_cuda(state)
+    assert payload.reads == (0 if legacy_first else 1)
+
+
+@pytest.mark.parametrize("word_value", [cuda.COMPACT_ERROR_CODE, 20 << cuda.ERROR_BITS])
+def test_inconsistent_compact_indicator_fails_closed(state, word_value):
+    word = Status(word_value)
+    invocation, _ = compact_invocation(state, word, 0, [-1, 0])
+    cuda.cuda_streamptr_to_contexts[state.ptr] = (word, [invocation])
+    with pytest.raises(
+        RuntimeError, match=r"compact CUDA error|outside the pending batch"
+    ):
+        cuda.synchronize_cuda(state)
+    with pytest.raises(RuntimeError):
+        invocation.completion.check()
+
+
+def test_compact_registration_rejects_mixed_status_modes(state):
+    word = Status(cuda.NO_ERROR)
+    invocation, _ = compact_invocation(state, word, 0, [-1, 0])
+    token = cuda._active_invocation.set((invocation, state.ptr, 0))
+    try:
+        with pytest.raises(ValueError, match="mix compact"):
+            cuda.defer_status(Status([-1, 0]), decode, stream=state)
+    finally:
+        cuda._active_invocation.reset(token)

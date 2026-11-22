@@ -69,7 +69,7 @@ def test_public_guarded_simplification(
                     result._carry(
                         ak.index.Index64(cp.asarray([length - 1])), allow_lazy=False
                     )
-        assert reads == [1]
+        assert reads == ([] if error_row is None else [1])
         cuda.synchronize_cuda(stream)
 
 
@@ -147,3 +147,75 @@ def test_invalid_guard_precedes_content_transfer(monkeypatch):
             ak.to_backend(result, "cpu")
         assert transfers == []
         cuda.synchronize_cuda(stream)
+
+
+@pytest.mark.parametrize("length", [32, 129])
+def test_compact_queued_errors_and_prepared_reuse(length, monkeypatch):
+    from awkward._connect.cuda import _indexedarray
+
+    with cp.cuda.Stream(non_blocking=True) as stream:
+        cuda.synchronize_cuda(stream)
+        inner = ak.contents.IndexedArray(
+            ak.index.Index64(cp.asarray([2, 0, 1])),
+            ak.contents.NumpyArray(cp.asarray([10, 20, 30])),
+        )
+        valid = cp.arange(length, dtype=cp.int64) % 3
+        # Prepare this dtype/shape and both large-path operations before checks.
+        warmed = ak.contents.IndexedArray.simplified(ak.index.Index64(valid), inner)
+        cuda.synchronize_cuda(stream)
+        assert warmed.index.data.materialize().shape == (length,)
+
+        def no_factory(*args, **kwargs):
+            raise AssertionError("changing invocation ordinal rebuilt an operation")
+
+        for name in ("make_unary_transform", "make_reduce_into", "make_op_adapter"):
+            monkeypatch.setattr(_indexedarray, name, no_factory)
+        first_bad = valid.copy()
+        first_bad[length // 2] = 99
+        later_bad = valid.copy()
+        later_bad[0] = 88
+        results = [
+            ak.contents.IndexedArray.simplified(ak.index.Index64(index), inner)
+            for index in (valid, first_bad, later_bad)
+        ]
+        with pytest.raises(ValueError, match="index out of range") as caught:
+            cuda.synchronize_cuda(stream)
+        assert (caught.value.id, caught.value.attempt) == (length // 2, 99)
+        assert (
+            ak.to_list(results[0])
+            == np.array([30, 10, 20])[np.arange(length) % 3].tolist()
+        )
+        for result in results[1:]:
+            with pytest.raises(ValueError, match="index out of range") as caught:
+                ak.to_backend(result, "cpu")
+            assert (caught.value.id, caught.value.attempt) == (length // 2, 99)
+        cuda.synchronize_cuda(stream)
+
+
+def test_compact_error_words_are_stream_local():
+    bad_stream = cp.cuda.Stream(non_blocking=True)
+    good_stream = cp.cuda.Stream(non_blocking=True)
+
+    def make_result(index):
+        inner = ak.contents.IndexedArray(
+            ak.index.Index64(cp.asarray([1, 0])),
+            ak.contents.NumpyArray(cp.asarray([10, 20])),
+        )
+        return ak.contents.IndexedArray.simplified(
+            ak.index.Index64(cp.asarray(index)), inner
+        )
+
+    with bad_stream:
+        cuda.synchronize_cuda(bad_stream)
+        bad = make_result([0, 99])
+    with good_stream:
+        cuda.synchronize_cuda(good_stream)
+        good = make_result([0, 1])
+        cuda.synchronize_cuda(good_stream)
+        assert ak.to_list(good) == [20, 10]
+        cuda.synchronize_cuda(good_stream)
+    with bad_stream:
+        with pytest.raises(ValueError, match="index out of range"):
+            cuda.synchronize_cuda(bad_stream)
+        with pytest.raises(ValueError, match="index out of range"):
+            ak.to_backend(bad, "cpu")

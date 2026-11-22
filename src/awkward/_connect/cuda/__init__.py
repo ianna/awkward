@@ -32,6 +32,7 @@ kernel_errors = {}
 kernel = None
 
 ERROR_BITS = 8
+COMPACT_ERROR_CODE = (1 << ERROR_BITS) - 1
 NO_ERROR = numpy.iinfo(numpy.uint64).max
 
 # When the pending-invocation list for a stream reaches this length, the
@@ -177,7 +178,24 @@ class CompletionRecord:
             self._resolved = True
 
 
-def defer_status(status, decode, *, stream, keepalive=()):
+def compact_error_state():
+    """Return this invocation's stream-owned error word and runtime ordinal.
+
+    Publishers must use the recorded stream and one writer per launch. The
+    compact code reserves the low bits of this invocation's existing error word;
+    detailed status remains private and is transferred only on failure.
+    """
+    active = _active_invocation.get()
+    if active is None:
+        raise RuntimeError("compact error state requires an active invocation")
+    invocation, _stream_ptr, device = active
+    word = invocation.error_word
+    if word is None or word.device.id != device:
+        raise RuntimeError("compact error word must belong to the producer device")
+    return word, invocation.error_index
+
+
+def defer_status(status, decode, *, stream, keepalive=(), compact=False):
     """Retain a device status until the owning compute invocation is drained.
 
     ``decode(host_status)`` returns None on success or an exception containing
@@ -195,6 +213,11 @@ def defer_status(status, decode, *, stream, keepalive=()):
         raise ValueError("deferred status must belong to the invocation stream/device")
     if invocation.completion._resolved:
         raise RuntimeError("cannot register status after invocation completion")
+    if compact:
+        compact_error_state()
+    if invocation.deferred_statuses and invocation.compact_status != compact:
+        raise ValueError("cannot mix compact and ordinary statuses in one invocation")
+    invocation.compact_status = compact
     invocation.completion._device_id = device_id
     invocation.completion._stream = stream
     invocation.deferred_statuses.append((status, decode, keepalive))
@@ -205,6 +228,9 @@ class Invocation:
     def __init__(self, name, error_context):
         self.completion = CompletionRecord()
         self.deferred_statuses = []
+        self.compact_status = False
+        self.error_word = None
+        self.error_index = None
         self._name = name
         self._error_context = error_context
 
@@ -300,19 +326,29 @@ def _synchronize_cuda(stream):
             if invocation_index == NO_ERROR
             else int(invocation_index) >> ERROR_BITS
         )
+        if legacy_index is not None and not 0 <= legacy_index < len(contexts):
+            raise RuntimeError("CUDA error indicator refers outside the pending batch")
         for index, invocation in enumerate(contexts):
             if first_error is None:
                 error = None
                 try:
-                    for status, decode, _keepalive in invocation.deferred_statuses:
-                        error = decode(status.get(stream=stream).tolist())
-                        if error is not None:
-                            break
+                    # Compact publishers set the shared word in their existing
+                    # write operation. A successful batch needs no payload reads.
+                    if not invocation.compact_status or index == legacy_index:
+                        for status, decode, _keepalive in invocation.deferred_statuses:
+                            error = decode(status.get(stream=stream).tolist())
+                            if error is not None:
+                                break
                     if error is None and index == legacy_index:
                         code = int(invocation_index) & ((1 << ERROR_BITS) - 1)
-                        error = ValueError(
-                            f"{kernel_errors[invocation.name][code]} in compiled CUDA code ({invocation.name})"
-                        )
+                        if invocation.compact_status and code == COMPACT_ERROR_CODE:
+                            error = RuntimeError(
+                                "compact CUDA error has no failing payload"
+                            )
+                        else:
+                            error = ValueError(
+                                f"{kernel_errors[invocation.name][code]} in compiled CUDA code ({invocation.name})"
+                            )
                     if error is not None and invocation.error_context is not None:
                         error = invocation.error_context.decorate_exception(
                             type(error), error
