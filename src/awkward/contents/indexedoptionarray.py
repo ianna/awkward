@@ -170,20 +170,25 @@ class IndexedOptionArray(IndexedOptionMeta[Content], Content):
                 inner = content.to_IndexedOptionArray64().index
             result = ak.index.Index64.empty(index.length, nplike=backend.nplike)
 
-            backend.maybe_kernel_error(
-                backend[
-                    "awkward_IndexedArray_simplify",
-                    result.dtype.type,
-                    index.dtype.type,
-                    inner.dtype.type,
-                ](
-                    result.data,
-                    index.data,
-                    index.length,
-                    inner.data,
-                    inner.length,
+            if backend.name == "cuda":
+                from awkward._connect.cuda._index_guard import simplify_index
+
+                result = simplify_index(backend, result, index, inner)
+            else:
+                backend.maybe_kernel_error(
+                    backend[
+                        "awkward_IndexedArray_simplify",
+                        result.dtype.type,
+                        index.dtype.type,
+                        inner.dtype.type,
+                    ](
+                        result.data,
+                        index.data,
+                        index.length,
+                        inner.data,
+                        inner.length,
+                    )
                 )
-            )
             return IndexedOptionArray(
                 result,
                 content.content,

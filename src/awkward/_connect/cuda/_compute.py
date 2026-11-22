@@ -3600,8 +3600,40 @@ def awkward_IndexedArray_simplify(
     if outerlength == 0:
         return None
     if hasattr(outerindex, "__cuda_array_interface__"):
+        from awkward._connect.cuda._index_guard import _defer_simplify
         from awkward._connect.cuda._indexedarray import simplify_status
 
+        if _defer_simplify.get():
+            from awkward._connect.cuda import defer_status
+
+            scratch = []
+            status = simplify_status(
+                toindex,
+                outerindex,
+                outerlength,
+                innerindex,
+                innerlength,
+                keepalive=scratch,
+            )
+
+            def decode(values):
+                row, attempt = values
+                if row >= outerlength:
+                    return None
+                error = ValueError(
+                    f"index out of range while attempting to get index {attempt} "
+                    "(in compiled code: cuda.compute (awkward_IndexedArray_simplify))"
+                )
+                error.id = row
+                error.attempt = attempt
+                return error
+
+            return defer_status(
+                status,
+                decode,
+                stream=cp.cuda.get_current_stream(),
+                keepalive=(toindex, outerindex, innerindex, *scratch),
+            )
         row, attempt = (
             simplify_status(toindex, outerindex, outerlength, innerindex, innerlength)
             .get()

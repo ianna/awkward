@@ -70,7 +70,7 @@ def test_public_simplification(outer_dtype, inner_dtype, option):
         with pytest.raises(ValueError, match="index out of range"):
             outer_class.simplified(
                 ak.index.Index(cp.asarray([1, 3], dtype=outer_dtype)), gpu_inner
-            )
+            ).to_list()
         ak._connect.cuda.synchronize_cuda(stream)
         assert outer_class.simplified(outer, gpu_inner).to_list() == expected
 

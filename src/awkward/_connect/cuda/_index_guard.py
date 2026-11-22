@@ -2,6 +2,7 @@
 
 """Experimental index-consumption barrier; not enabled in production dispatch."""
 
+from contextvars import ContextVar
 from threading import RLock
 
 from awkward._nplikes.virtual import VirtualNDArray
@@ -65,3 +66,30 @@ def guard_index(index, validation):
 
     buffer = VirtualNDArray(index.nplike, (index.length,), index.dtype, consume)
     return type(index)(buffer, metadata=index._metadata, nplike=index.nplike)
+
+
+_defer_simplify = ContextVar("awkward_defer_indexed_simplify", default=False)
+
+
+def simplify_index(backend, result, outer, inner):
+    """Opt into deferred simplify only where the output can be guarded.
+
+    Direct kernel callers retain their synchronous KernelError contract. CPU,
+    JAX and typetracer callers do not enter this CUDA-only helper.
+    """
+    token = _defer_simplify.set(True)
+    try:
+        error = backend[
+            "awkward_IndexedArray_simplify",
+            result.dtype.type,
+            outer.dtype.type,
+            inner.dtype.type,
+        ](result.data, outer.data, outer.length, inner.data, inner.length)
+    finally:
+        _defer_simplify.reset(token)
+    from awkward._connect.cuda import CompletionRecord
+
+    if isinstance(error, CompletionRecord):
+        return guard_index(result, error)
+    backend.maybe_kernel_error(error)
+    return result

@@ -140,7 +140,7 @@ class _Simplify:
             stream=stream,
         )
 
-    def __call__(self, output, outer, inner, stream):
+    def __call__(self, output, outer, inner, stream, keepalive=None):
         # Status and reduction workspace belong to this invocation; cached
         # operators retain only descriptors. The small path remains fused.
         status = cp.empty(2, dtype=cp.int64)
@@ -175,6 +175,8 @@ class _Simplify:
                         temp_storage=None, **arguments
                     )
                 storage = cp.empty(self.reduce_storage_bytes, dtype=cp.uint8)
+                if keepalive is not None:
+                    keepalive.append(storage)
                 self.reducer(temp_storage=storage, **arguments)
                 self.transform("write", self.write, self.discard, self.length, stream)
         finally:
@@ -190,7 +192,7 @@ def _setup(
     return _Simplify(output_dtype, outer_dtype, inner_dtype, length, innerlength)
 
 
-def simplify_status(output, outer, length, inner, innerlength):
+def simplify_status(output, outer, length, inner, innerlength, *, keepalive=None):
     with _lock:
         setup = _setup(
             cp.cuda.runtime.getDevice(),
@@ -201,4 +203,4 @@ def simplify_status(output, outer, length, inner, innerlength):
             length,
             innerlength,
         )
-        return setup(output, outer, inner, _Stream())
+        return setup(output, outer, inner, _Stream(), keepalive=keepalive)

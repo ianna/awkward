@@ -86,3 +86,30 @@ def test_interrupted_validation_can_retry():
     state.check()
     state.check()
     assert calls == [1, 1]
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_simplify_index_scope_and_guard(fail):
+    from awkward._connect.cuda import CompletionRecord
+    from awkward._connect.cuda._index_guard import _defer_simplify, simplify_index
+
+    record = CompletionRecord()
+    record._resolve(ValueError("index out of range") if fail else None)
+
+    class Backend:
+        def __getitem__(self, key):
+            def kernel(*args):
+                assert _defer_simplify.get()
+                return record
+
+            return kernel
+
+    source = ak.index.Index64(np.array([0, 1]))
+    result = simplify_index(Backend(), source, source, source)
+    assert not _defer_simplify.get()
+    assert result.length == 2
+    if fail:
+        with pytest.raises(ValueError, match="index out of range"):
+            result[0]
+    else:
+        assert result[1] == 1

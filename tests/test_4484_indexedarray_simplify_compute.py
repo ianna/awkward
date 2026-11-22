@@ -636,3 +636,46 @@ def test_null_count_reduction_uses_current_stream_and_output_width(values):
     output = np.full(2, 0x1234567800000000, dtype=np.int64)
     namespace[node.name](output[:1], np.array(values, dtype=np.int64), len(values))
     assert output.tolist() == [sum(x < 0 for x in values), 0x1234567800000000]
+
+
+@pytest.mark.parametrize("length,error_row", [(32, None), (32, 1), (129, None), (129, 100)])
+def test_deferred_prepared_registration_has_no_host_read(
+    length, error_row, prepared_implementation, implementation, monkeypatch
+):
+    import sys
+    from types import ModuleType
+
+    import awkward._connect.cuda as cuda
+    from awkward._connect.cuda._index_guard import _defer_simplify
+
+    namespace, buffer, _ = prepared_implementation
+    module = ModuleType("awkward._connect.cuda._indexedarray")
+    module.simplify_status = namespace["simplify_status"]
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    registered = []
+
+    def register(status, decode, *, stream, keepalive):
+        registered.append((status, decode, keepalive))
+        return "completion"
+
+    monkeypatch.setattr(cuda, "defer_status", register)
+    args = large_case(length, error_row)
+    device = [x.copy().view(buffer) if isinstance(x, np.ndarray) else x for x in args]
+    expected = copy.deepcopy(args)
+    error = NumpyBackend.instance()[
+        "awkward_IndexedArray_simplify", np.int64, np.int64, np.int64
+    ](*expected)
+    token = _defer_simplify.set(True)
+    _DeviceArray.reads = 0
+    try:
+        assert implementation["awkward_IndexedArray_simplify"](*device) == "completion"
+    finally:
+        _defer_simplify.reset(token)
+    assert _DeviceArray.reads == 0
+    status, decode, keepalive = registered[0]
+    actual = decode(status.tolist())
+    assert (actual is not None) == bool(error.str)
+    if actual is not None:
+        assert (actual.id, actual.attempt) == (error.id, error.attempt)
+    assert len(keepalive) == (4 if length > 64 else 3)
+    np.testing.assert_array_equal(device[0], expected[0])
