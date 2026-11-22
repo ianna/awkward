@@ -34,6 +34,10 @@ git -C awkward-matrix worktree add --detach \
 git -C awkward-matrix worktree add --detach \
   ../awkward-indexed-baseline efbe2a47b3642ee5850f972ff4932df2f07b7f0a
 
+# Generate canonical signatures in both fresh worktrees (requires PyYAML).
+python awkward-indexed-baseline/dev/generate-kernel-signatures.py
+python awkward-indexed-deferred/dev/generate-kernel-signatures.py
+
 # Prepare editable metadata/version files for both pure-Python checkouts.
 python -m pip install --no-deps --no-build-isolation -e awkward-indexed-baseline
 python -m pip install --no-deps --no-build-isolation -e awkward-indexed-deferred

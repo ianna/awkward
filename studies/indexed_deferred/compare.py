@@ -188,6 +188,13 @@ def main():
         "baseline": args.baseline.resolve(),
         "candidate": args.candidate.resolve(),
     }
+    for source in sources.values():
+        generated = source / "src/awkward/_connect/cuda/_kernel_signatures.py"
+        if not generated.is_file():
+            parser.error(
+                f"missing generated CUDA signatures in {source}; run "
+                f"python {source / 'dev/generate-kernel-signatures.py'}"
+            )
     expected_shas = {name: git_sha(source) for name, source in sources.items()}
     runs = {name: [] for name in sources}
     for pair in range(args.pairs):
